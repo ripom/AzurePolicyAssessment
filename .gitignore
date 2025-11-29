@@ -1,0 +1,26 @@
+# CSV export files
+*.csv
+
+# PowerShell module cache
+PSGetModuleInfo.xml
+
+# Local configuration files
+*.local.*
+
+# Logs
+*.log
+
+# Azure credentials cache
+.azure/
+
+# Visual Studio Code
+.vscode/
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+
+# OS generated files
+.DS_Store
+Thumbs.db
