@@ -11,7 +11,7 @@ This PowerShell script analyzes Azure Policy assignments across all management g
 - **Direct Assignment Filtering**: Shows only policies directly assigned to each management group, excluding inherited policies
 - **Detailed Progress Tracking**: Displays real-time progress as it processes each management group
 - **Impact Analysis & Recommendations**: Optional recommendations on cost, security, compliance, and operational impact of policies
-- **Azure Landing Zone Validation**: Dynamically compares deployed policies against Azure Landing Zone recommendations from GitHub
+- **Azure Landing Zone Validation**: Dynamically compares deployed policies against the official [Azure Landing Zones Library](https://github.com/Azure/Azure-Landing-Zones-Library) (version-controlled policy definitions)
 - **Comprehensive Output**: Shows policy assignment details including:
   - Assignment Name
   - Display Name
@@ -232,19 +232,21 @@ Review the console output to identify where policies are actually assigned.
 - Requires appropriate Azure permissions to read management groups and policies
 - Large tenants with many management groups may take time to process
 - Parameter values may show "(no parameters)" for some policies due to Azure API limitations
-- Azure Landing Zone validation requires internet connectivity to fetch latest policies from GitHub (falls back to cached list if offline)
+- Azure Landing Zone validation requires internet connectivity to fetch latest policies from the official [Azure Landing Zones Library](https://github.com/Azure/Azure-Landing-Zones-Library) (falls back to cached list if offline)
 
 ## Version History
 
+- **v2.1**: Updated to use official Azure Landing Zones Library as source of truth for policy recommendations
 - **v2.0**: Added impact analysis, recommendations, Azure Landing Zone validation, auto-CSV export
 - **v1.0**: Initial release with multi-tenant support and inherited policy filtering
+
+## References
+
+- [Azure Landing Zones Library](https://github.com/Azure/Azure-Landing-Zones-Library) - Official ALZ policy definitions
+- [Azure Policy Overview](https://docs.microsoft.com/en-us/azure/governance/policy/overview)
+- [Management Groups](https://docs.microsoft.com/en-us/azure/governance/management-groups/overview)
 
 ## License
 
 This script is provided as-is for Azure governance and compliance purposes.
-
-## Support
-
-For issues or questions, review the Azure Policy documentation:
-- [Azure Policy Overview](https://docs.microsoft.com/en-us/azure/governance/policy/overview)
-- [Management Groups](https://docs.microsoft.com/en-us/azure/governance/management-groups/overview)
+```

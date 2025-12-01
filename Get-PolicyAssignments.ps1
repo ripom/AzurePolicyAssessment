@@ -89,19 +89,24 @@ Write-Host "`nRetrieving all management groups..." -ForegroundColor Cyan
 # Function to get Azure Landing Zone recommended policies from GitHub
 function Get-ALZRecommendedPolicies {
     param(
-        [string]$ALZVersion = "main"
+        [string]$ALZVersion = "platform/alz/2025.09.3"
     )
     
-    Write-Host "  Fetching Azure Landing Zone recommended policies from GitHub..." -ForegroundColor Gray
+    Write-Host "  Fetching Azure Landing Zone recommended policies from official ALZ Library..." -ForegroundColor Gray
     
     try {
-        # Official ALZ-Bicep repository policy assignments
-        $alzGitHubBaseUrl = "https://raw.githubusercontent.com/Azure/ALZ-Bicep/$ALZVersion/infra-as-code/bicep/modules/policy/assignments/alzDefaults"
+        # Official Azure Landing Zones Library - the authoritative source
+        $alzLibraryBaseUrl = "https://api.github.com/repos/Azure/Azure-Landing-Zones-Library/contents/platform/alz/policy_assignments"
         
-        # Key policy assignment files in ALZ
-        $alzPolicyFiles = @(
-            "alzDefaultPolicyAssignments.bicep"
-        )
+        Write-Host "    Querying ALZ Library policy assignments directory..." -ForegroundColor Gray
+        
+        # Get list of policy assignment files from the library
+        $headers = @{
+            'Accept' = 'application/vnd.github.v3+json'
+            'User-Agent' = 'PowerShell-AzurePolicyAssessment'
+        }
+        
+        $policyFiles = Invoke-RestMethod -Uri "$alzLibraryBaseUrl`?ref=$ALZVersion" -Headers $headers -Method Get -TimeoutSec 15 -ErrorAction Stop
         
         $discoveredPolicies = @{
             'Security & Network' = [System.Collections.ArrayList]@()
@@ -113,50 +118,37 @@ function Get-ALZRecommendedPolicies {
             'Other' = [System.Collections.ArrayList]@()
         }
         
-        foreach ($file in $alzPolicyFiles) {
-            try {
-                $url = "$alzGitHubBaseUrl/$file"
-                Write-Host "    Attempting to fetch: $url" -ForegroundColor Gray
-                $content = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10 -ErrorAction Stop
+        $policyCount = 0
+        foreach ($file in $policyFiles) {
+            if ($file.name -match '\.alz_policy_assignment\.json$') {
+                # Extract policy name from filename (e.g., Deny-IP-forwarding.alz_policy_assignment.json -> Deny-IP-forwarding)
+                $policyName = $file.name -replace '\.alz_policy_assignment\.json$', ''
                 
-                # Extract policy assignment names using regex - look for module comments and parPolicyAssignmentName
-                $policyMatches = [regex]::Matches($content, "//\s*Module\s*-\s*Policy\s*Assignment\s*-\s*([A-Za-z0-9\-]+)")
+                $policyCount++
                 
-                $tempPolicies = @()
-                foreach ($match in $policyMatches) {
-                    $policyName = $match.Groups[1].Value
-                    $tempPolicies += $policyName
+                
+                # Categorize by naming convention
+                if ($policyName -match '^(Deny|Enforce).*(?:Public|Internet|IP|Network|Subnet|Nsg|Firewall|Storage.*Http|Hybrid)') {
+                    [void]$discoveredPolicies['Security & Network'].Add($policyName)
                 }
-                
-                # Categorize all policies after extraction
-                foreach ($policyName in $tempPolicies) {
-                    # Categorize by naming convention
-                    if ($policyName -match '^(Deny|Enforce).*(?:Public|Internet|IP|Network|Subnet|NSG|Firewall|Storage.*http)') {
-                        [void]$discoveredPolicies['Security & Network'].Add($policyName)
-                    }
-                    elseif ($policyName -match '^Deploy.*(?:Log|Monitor|Diagnostic|Activity|VMSS|VM.*Monitoring)') {
-                        [void]$discoveredPolicies['Monitoring & Logging'].Add($policyName)
-                    }
-                    elseif ($policyName -match '(?:Backup|ASR|Recovery|ChangeTrack)') {
-                        [void]$discoveredPolicies['Backup & DR'].Add($policyName)
-                    }
-                    elseif ($policyName -match '^(?:Enforce|Audit).*(?:Tag|Location|Naming|ACSB|Decomm|Sandbox|Unused)') {
-                        [void]$discoveredPolicies['Compliance & Governance'].Add($policyName)
-                    }
-                    elseif ($policyName -match '(?:MDFC|Defender|Security.*Center|ASC|DefSQL|OssDb|MDEndpoint)') {
-                        [void]$discoveredPolicies['Defender for Cloud'].Add($policyName)
-                    }
-                    elseif ($policyName -match '(?:Identity|MFA|Conditional|Access|Classic)') {
-                        [void]$discoveredPolicies['Identity'].Add($policyName)
-                    }
-                    else {
-                        [void]$discoveredPolicies['Other'].Add($policyName)
-                    }
+                elseif ($policyName -match '^Deploy.*(?:Log|Monitor|Diagnostic|Activity|Vmss|Vm.*Monitoring|Asc)') {
+                    [void]$discoveredPolicies['Monitoring & Logging'].Add($policyName)
                 }
-            }
-            catch {
-                Write-Host "    Failed to fetch $file : $($_.Exception.Message)" -ForegroundColor Yellow
-                # Continue to next file or fallback
+                elseif ($policyName -match '(?:Backup|Asr|Recovery|ChangeTrack)') {
+                    [void]$discoveredPolicies['Backup & DR'].Add($policyName)
+                }
+                elseif ($policyName -match '^(?:Enforce|Audit).*(?:Tag|Location|Naming|Acsb|Decomm|Sandbox|Unused)') {
+                    [void]$discoveredPolicies['Compliance & Governance'].Add($policyName)
+                }
+                elseif ($policyName -match '(?:Mdfc|Defender|Security.*Center|Asc|DefSql|OssDb|MdEndpoint|SqlAtp)') {
+                    [void]$discoveredPolicies['Defender for Cloud'].Add($policyName)
+                }
+                elseif ($policyName -match '(?:Identity|Mfa|Conditional|Access|Classic)') {
+                    [void]$discoveredPolicies['Identity'].Add($policyName)
+                }
+                else {
+                    [void]$discoveredPolicies['Other'].Add($policyName)
+                }
             }
         }
         
@@ -164,7 +156,7 @@ function Get-ALZRecommendedPolicies {
         $totalFound = ($discoveredPolicies.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
         
         if ($totalFound -eq 0) {
-            Write-Host "    No policies found from GitHub, using static fallback list..." -ForegroundColor Yellow
+            Write-Host "    No policies found from ALZ Library, using static fallback list..." -ForegroundColor Yellow
             return Get-FallbackALZPolicies
         }
         
@@ -174,11 +166,11 @@ function Get-ALZRecommendedPolicies {
             $discoveredPolicies[$category] = @($discoveredPolicies[$category] | Select-Object -Unique | Sort-Object)
         }
         
-        Write-Host "    Successfully retrieved $totalFound policy recommendations from ALZ repository" -ForegroundColor Green
+        Write-Host "    Successfully retrieved $totalFound policy recommendations from ALZ Library ($ALZVersion)" -ForegroundColor Green
         return $discoveredPolicies
     }
     catch {
-        Write-Host "    Error fetching from GitHub: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "    Error fetching from ALZ Library: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host "    Using static fallback list..." -ForegroundColor Yellow
         return Get-FallbackALZPolicies
     }
