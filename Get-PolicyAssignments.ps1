@@ -104,52 +104,59 @@ function Get-ALZRecommendedPolicies {
         )
         
         $discoveredPolicies = @{
-            'Security & Network' = @()
-            'Monitoring & Logging' = @()
-            'Backup & DR' = @()
-            'Compliance & Governance' = @()
-            'Defender for Cloud' = @()
-            'Identity' = @()
-            'Other' = @()
+            'Security & Network' = [System.Collections.ArrayList]@()
+            'Monitoring & Logging' = [System.Collections.ArrayList]@()
+            'Backup & DR' = [System.Collections.ArrayList]@()
+            'Compliance & Governance' = [System.Collections.ArrayList]@()
+            'Defender for Cloud' = [System.Collections.ArrayList]@()
+            'Identity' = [System.Collections.ArrayList]@()
+            'Other' = [System.Collections.ArrayList]@()
         }
         
         foreach ($file in $alzPolicyFiles) {
             try {
                 $url = "$alzGitHubBaseUrl/$file"
-                $content = Invoke-RestMethod -Uri $url -Method Get -ErrorAction SilentlyContinue
+                Write-Host "    Attempting to fetch: $url" -ForegroundColor Gray
+                $content = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10 -ErrorAction Stop
                 
-                # Extract policy assignment names using regex
-                $policyMatches = [regex]::Matches($content, "name:\s*'([^']+)'")
+                # Extract policy assignment names using regex - look for module comments and parPolicyAssignmentName
+                $policyMatches = [regex]::Matches($content, "//\s*Module\s*-\s*Policy\s*Assignment\s*-\s*([A-Za-z0-9\-]+)")
                 
+                $tempPolicies = @()
                 foreach ($match in $policyMatches) {
                     $policyName = $match.Groups[1].Value
-                    
+                    $tempPolicies += $policyName
+                }
+                
+                # Categorize all policies after extraction
+                foreach ($policyName in $tempPolicies) {
                     # Categorize by naming convention
                     if ($policyName -match '^(Deny|Enforce).*(?:Public|Internet|IP|Network|Subnet|NSG|Firewall|Storage.*http)') {
-                        $discoveredPolicies['Security & Network'] += $policyName
+                        [void]$discoveredPolicies['Security & Network'].Add($policyName)
                     }
                     elseif ($policyName -match '^Deploy.*(?:Log|Monitor|Diagnostic|Activity|VMSS|VM.*Monitoring)') {
-                        $discoveredPolicies['Monitoring & Logging'] += $policyName
+                        [void]$discoveredPolicies['Monitoring & Logging'].Add($policyName)
                     }
                     elseif ($policyName -match '(?:Backup|ASR|Recovery|ChangeTrack)') {
-                        $discoveredPolicies['Backup & DR'] += $policyName
+                        [void]$discoveredPolicies['Backup & DR'].Add($policyName)
                     }
                     elseif ($policyName -match '^(?:Enforce|Audit).*(?:Tag|Location|Naming|ACSB|Decomm|Sandbox|Unused)') {
-                        $discoveredPolicies['Compliance & Governance'] += $policyName
+                        [void]$discoveredPolicies['Compliance & Governance'].Add($policyName)
                     }
                     elseif ($policyName -match '(?:MDFC|Defender|Security.*Center|ASC|DefSQL|OssDb|MDEndpoint)') {
-                        $discoveredPolicies['Defender for Cloud'] += $policyName
+                        [void]$discoveredPolicies['Defender for Cloud'].Add($policyName)
                     }
                     elseif ($policyName -match '(?:Identity|MFA|Conditional|Access|Classic)') {
-                        $discoveredPolicies['Identity'] += $policyName
+                        [void]$discoveredPolicies['Identity'].Add($policyName)
                     }
                     else {
-                        $discoveredPolicies['Other'] += $policyName
+                        [void]$discoveredPolicies['Other'].Add($policyName)
                     }
                 }
             }
             catch {
-                # Continue to fallback
+                Write-Host "    Failed to fetch $file : $($_.Exception.Message)" -ForegroundColor Yellow
+                # Continue to next file or fallback
             }
         }
         
@@ -157,20 +164,22 @@ function Get-ALZRecommendedPolicies {
         $totalFound = ($discoveredPolicies.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
         
         if ($totalFound -eq 0) {
-            Write-Host "    Could not fetch from GitHub, using static fallback list..." -ForegroundColor Yellow
+            Write-Host "    No policies found from GitHub, using static fallback list..." -ForegroundColor Yellow
             return Get-FallbackALZPolicies
         }
         
-        # Remove duplicates and empty categories
-        foreach ($category in $discoveredPolicies.Keys) {
-            $discoveredPolicies[$category] = $discoveredPolicies[$category] | Select-Object -Unique | Sort-Object
+        # Remove duplicates and empty categories (create copy of keys to avoid collection modification)
+        $categories = @($discoveredPolicies.Keys)
+        foreach ($category in $categories) {
+            $discoveredPolicies[$category] = @($discoveredPolicies[$category] | Select-Object -Unique | Sort-Object)
         }
         
         Write-Host "    Successfully retrieved $totalFound policy recommendations from ALZ repository" -ForegroundColor Green
         return $discoveredPolicies
     }
     catch {
-        Write-Host "    Error fetching from GitHub, using static fallback list..." -ForegroundColor Yellow
+        Write-Host "    Error fetching from GitHub: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "    Using static fallback list..." -ForegroundColor Yellow
         return Get-FallbackALZPolicies
     }
 }
