@@ -7,14 +7,25 @@
     and displays them in a table format showing the policy name, type (Initiative or Policy), 
     effect type, enforcement mode, scope type (Management Group, Subscription, or Resource Group), 
     scope name, and policy definition name. Optionally provides recommendations on impact analysis.
+    
+    Security Impact Classification:
+    - High: Policies with Deny/DeployIfNotExists/Modify effects, or those protecting critical areas
+            (network security, data encryption, public access, Defender for Cloud, backup/DR)
+    - Medium: Audit policies, governance policies, and general compliance controls
+    - Low: Informational policies, tagging policies
+    - None: Disabled policies or those in DoNotEnforce mode
 
 .PARAMETER ShowRecommendations
     When specified, generates recommendations for each policy assignment including impact on cost, 
-    security, compliance, and operational overhead.
+    security, compliance, and operational overhead. Also includes a detailed security posture 
+    assessment showing which high-impact security policies are deployed.
 
-.PARAMETER PromptForExport
-    When specified, prompts the user before exporting results to CSV. By default, results are 
-    automatically exported to CSV without prompting.
+.PARAMETER Export
+    When specified, exports the results to a CSV file. Without this switch, no file is exported.
+
+.PARAMETER FileName
+    Custom filename for the CSV export. If not provided, uses default timestamped format:
+    PolicyAssignments_YYYYMMDD_HHMMSS.csv. Only used when -Export is specified.
 
 .EXAMPLE
     .\Get-PolicyAssignments.ps1
@@ -23,7 +34,13 @@
     .\Get-PolicyAssignments.ps1 -ShowRecommendations
 
 .EXAMPLE
-    .\Get-PolicyAssignments.ps1 -PromptForExport
+    .\Get-PolicyAssignments.ps1 -Export
+
+.EXAMPLE
+    .\Get-PolicyAssignments.ps1 -Export -FileName "MyPolicyReport.csv"
+
+.EXAMPLE
+    .\Get-PolicyAssignments.ps1 -ShowRecommendations -Export -FileName "PolicyAudit_$(Get-Date -Format 'yyyy-MM').csv"
 #>
 
 [CmdletBinding()]
@@ -32,7 +49,10 @@ param(
     [switch]$ShowRecommendations,
     
     [Parameter(Mandatory=$false)]
-    [switch]$PromptForExport
+    [switch]$Export,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$FileName
 )
 
 # Requires Azure PowerShell module
@@ -514,16 +534,34 @@ if ($ShowRecommendations) {
     Write-Host "(Based on official Azure Landing Zone Bicep repository)" -ForegroundColor Gray
     
     $missingCriticalPolicies = @()
-    $assignedPolicyNames = $results.'Policy Name'
+    $doNotEnforceALZPolicies = @()
+    $assignedPoliciesWithEnforcement = $results | Select-Object 'Assignment Name', 'Policy Name', 'Display Name', 'Enforcement Mode'
     
     foreach ($category in $recommendedALZPolicies.Keys) {
         if ($recommendedALZPolicies[$category].Count -eq 0) { continue }
         
         Write-Host "`n  $category" -ForegroundColor Cyan
         foreach ($policy in $recommendedALZPolicies[$category]) {
-            $found = $assignedPolicyNames | Where-Object { $_ -like "*$policy*" -or $policy -like "*$_*" }
-            if ($found) {
-                Write-Host "    ✓ $policy" -ForegroundColor Green
+            # Case-insensitive exact matching against Assignment Name, Policy Name, and Display Name
+            $matchingPolicies = $assignedPoliciesWithEnforcement | Where-Object { 
+                $_.'Assignment Name' -eq $policy -or 
+                $_.'Policy Name' -eq $policy -or
+                $_.'Display Name' -eq $policy
+            }
+            
+            if ($matchingPolicies) {
+                # Check if any matching policy is in DoNotEnforce mode
+                $doNotEnforceMatch = $matchingPolicies | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' }
+                if ($doNotEnforceMatch) {
+                    Write-Host "    ⚠️  $policy (DoNotEnforce)" -ForegroundColor Yellow
+                    $doNotEnforceALZPolicies += [PSCustomObject]@{
+                        Category = $category
+                        PolicyName = $policy
+                        ActualName = $doNotEnforceMatch[0].'Policy Name'
+                    }
+                } else {
+                    Write-Host "    ✓ $policy" -ForegroundColor Green
+                }
             } else {
                 Write-Host "    ✗ $policy (MISSING)" -ForegroundColor Red
                 $missingCriticalPolicies += [PSCustomObject]@{
@@ -547,12 +585,33 @@ if ($ShowRecommendations) {
         Write-Host "`n⚠️  ENFORCEMENT:" -ForegroundColor Yellow
         Write-Host "   $doNotEnforcePolicies policies are in DoNotEnforce mode."
         Write-Host "   These are not actively protecting your environment. Consider enabling enforcement." -ForegroundColor Yellow
+        
+        # Show ALZ-recommended policies in DoNotEnforce mode
+        if ($doNotEnforceALZPolicies.Count -gt 0) {
+            Write-Host "`n   ⚠️  ALZ-Recommended Policies in DoNotEnforce Mode:" -ForegroundColor Yellow
+            $doNotEnforceByCategory = $doNotEnforceALZPolicies | Group-Object Category
+            foreach ($group in $doNotEnforceByCategory) {
+                Write-Host "`n      $($group.Name):" -ForegroundColor White
+                foreach ($item in $group.Group) {
+                    Write-Host "        • $($item.ActualName) - DoNotEnforce" -ForegroundColor Gray
+                }
+            }
+            Write-Host "`n      These are recommended by Azure Landing Zones but not actively enforced." -ForegroundColor DarkYellow
+        }
     }
     
     if ($highCostPolicies -gt 0) {
         Write-Host "`n💰 COST OPTIMIZATION:" -ForegroundColor Cyan
         Write-Host "   $highCostPolicies policies have high cost impact."
-        Write-Host "   Review these for budget planning. Consider:" -ForegroundColor Cyan
+        
+        # List high cost impact policies
+        Write-Host "`n   High Cost Impact Policies:" -ForegroundColor White
+        $results | Where-Object { $_.'Cost Impact' -eq 'High' } | ForEach-Object {
+            $effectInfo = if ($_.'Effect Type' -ne '(not specified)') { "[$($_.'Effect Type')]" } else { "" }
+            Write-Host "     • $($_.'Policy Name') $effectInfo" -ForegroundColor Gray
+        }
+        
+        Write-Host "`n   Review these for budget planning. Consider:" -ForegroundColor Cyan
         Write-Host "   - Backup policies: Ensure retention is optimized"
         Write-Host "   - Monitoring policies: Use appropriate log retention"
         Write-Host "   - Defender for Cloud: Verify only necessary workloads are covered"
@@ -585,6 +644,25 @@ if ($ShowRecommendations) {
         Write-Host "   Weak - Only $highSecurityPolicies high-impact security policies. Requires attention." -ForegroundColor Red
     }
     
+    # List high security impact policies
+    if ($highSecurityPolicies -gt 0) {
+        Write-Host "`n   High Security Impact Policies Currently Deployed:" -ForegroundColor White
+        $results | Where-Object { $_.'Security Impact' -eq 'High' } | ForEach-Object {
+            $effectInfo = if ($_.'Effect Type' -ne '(not specified)') { "[$($_.'Effect Type')]" } else { "" }
+            $enforcementInfo = if ($_.'Enforcement Mode' -eq 'DoNotEnforce') { " (NOT ENFORCED)" } else { "" }
+            Write-Host "     • $($_.'Policy Name') $effectInfo$enforcementInfo" -ForegroundColor Gray
+        }
+        Write-Host "`n   Note: High security impact policies include:" -ForegroundColor DarkGray
+        Write-Host "   - Deny/Block policies preventing non-compliant deployments" -ForegroundColor DarkGray
+        Write-Host "   - DeployIfNotExists/Modify policies for automatic remediation" -ForegroundColor DarkGray
+        Write-Host "   - Policies protecting network security, encryption, and data access" -ForegroundColor DarkGray
+        Write-Host "   - Defender for Cloud and backup/disaster recovery policies" -ForegroundColor DarkGray
+    } else {
+        Write-Host "`n   ⚠️  No high security impact policies found!" -ForegroundColor Red
+        Write-Host "   Your environment lacks critical security controls." -ForegroundColor Red
+        Write-Host "   Consider implementing ALZ recommended policies from the gaps listed above." -ForegroundColor Yellow
+    }
+    
     # Best practices
     Write-Host "`n📋 BEST PRACTICES:" -ForegroundColor Yellow
     Write-Host "   1. Test blocking policies (Deny) in DoNotEnforce mode first"
@@ -595,21 +673,25 @@ if ($ShowRecommendations) {
     Write-Host "   6. Review policies quarterly for relevance and effectiveness"
 }
 
-# Export to CSV option
-if ($PromptForExport) {
-    $export = Read-Host "`nDo you want to export results to CSV? (Y/N)"
-    if ($export -eq 'Y' -or $export -eq 'y') {
+# Export to CSV if requested
+if ($Export) {
+    if ($FileName) {
+        # Use custom filename
+        $csvPath = $FileName
+        # Ensure .csv extension
+        if (-not $csvPath.EndsWith('.csv', [StringComparison]::OrdinalIgnoreCase)) {
+            $csvPath += '.csv'
+        }
+    } else {
+        # Use default timestamped filename
         $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
         $csvPath = ".\PolicyAssignments_$timestamp.csv"
-        $results | Export-Csv -Path $csvPath -NoTypeInformation
-        Write-Host "Results exported to: $csvPath" -ForegroundColor Green
     }
-} else {
-    # Auto-export by default
-    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $csvPath = ".\PolicyAssignments_$timestamp.csv"
+    
     $results | Export-Csv -Path $csvPath -NoTypeInformation
-    Write-Host "`nResults automatically exported to: $csvPath" -ForegroundColor Green
+    Write-Host "`nResults exported to: $csvPath" -ForegroundColor Green
+} else {
+    Write-Host "`nNo export requested. Use -Export switch to save results to CSV." -ForegroundColor Gray
 }
 
 Write-Host "`nTotal policy assignments found: $($results.Count)" -ForegroundColor Green

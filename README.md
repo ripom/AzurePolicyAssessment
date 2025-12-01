@@ -57,37 +57,47 @@ The account running the script needs:
 
 2. **Run the script**:
    ```powershell
-   # Basic execution (auto-exports to CSV)
+   # Basic execution (no export)
    .\Get-PolicyAssignments.ps1
    
    # With recommendations and impact analysis
    .\Get-PolicyAssignments.ps1 -ShowRecommendations
    
-   # Prompt before exporting to CSV
-   .\Get-PolicyAssignments.ps1 -PromptForExport
+   # Export to CSV with default timestamped filename
+   .\Get-PolicyAssignments.ps1 -Export
+   
+   # Export to CSV with custom filename
+   .\Get-PolicyAssignments.ps1 -Export -FileName "MyPolicyReport.csv"
    
    # With all options
-   .\Get-PolicyAssignments.ps1 -ShowRecommendations -PromptForExport
+   .\Get-PolicyAssignments.ps1 -ShowRecommendations -Export -FileName "PolicyAudit_$(Get-Date -Format 'yyyy-MM').csv"
    ```
 
 3. **Select a tenant** when prompted (if you have access to multiple tenants)
 
 4. **Review the output** in the console
 
-5. **CSV export**: By default, results are automatically exported to a timestamped CSV file. Use `-PromptForExport` switch to be prompted before exporting.
+5. **CSV export** (optional): Use the `-Export` switch to save results to a CSV file. Without this switch, no file is exported.
 
 ### Parameters
 
 - **`-ShowRecommendations`**: Generates comprehensive recommendations for each policy assignment including:
-  - Security Impact (Critical/High/Medium/Low)
-  - Cost Impact
-  - Compliance Impact
-  - Operational Overhead
+  - **Security Impact Classification** (High/Medium/Low/None):
+    - **High**: Deny/DeployIfNotExists/Modify effects, or policies protecting critical areas (network security, encryption, public access, Defender for Cloud, backup/DR)
+    - **Medium**: Audit policies, governance policies, general compliance controls
+    - **Low**: Informational policies, tagging policies
+    - **None**: Disabled policies or those in DoNotEnforce mode
+  - **Security Posture Assessment**: Shows count and detailed list of high-impact security policies currently deployed, with effect types and enforcement status
+  - Cost Impact Analysis
+  - Compliance Impact Assessment
+  - Operational Overhead Evaluation
   - Risk Level Assessment
-  - Azure Landing Zone Coverage Analysis
-  - Actionable recommendations
+  - Azure Landing Zone Coverage Analysis (compares against official ALZ Library)
+  - Actionable recommendations with gap analysis
 
-- **`-PromptForExport`**: Prompts user before exporting to CSV. Without this switch, results are automatically exported.
+- **`-Export`**: When specified, exports results to a CSV file. Without this switch, no file is exported.
+
+- **`-FileName`**: Custom filename for CSV export (e.g., "MyReport.csv"). If not provided, uses default timestamped format `PolicyAssignments_YYYYMMDD_HHMMSS.csv`. Only used when `-Export` is specified.
 
 ### Example Output
 
@@ -174,17 +184,26 @@ if ($assignment.Scope -eq "/providers/Microsoft.Management/managementGroups/$($m
 
 ### CSV Export
 
-**Default Behavior**: The script automatically exports results to a timestamped CSV file without prompting.
+**Export Behavior**: The script does NOT export to CSV by default. Use the `-Export` switch to save results.
 
-**Filename format**: `PolicyAssignments_YYYYMMDD_HHMMSS.csv`
+**Filename options**:
+- **Default**: `PolicyAssignments_YYYYMMDD_HHMMSS.csv` (timestamped)
+- **Custom**: Use `-FileName "YourCustomName.csv"` parameter
 
 **Location**: Current directory
 
 **Columns included**: All policy details including Assignment Name, Display Name, Policy Type, Effect Type, Enforcement Mode, Security Impact, Cost Impact, Compliance Impact, Operational Overhead, Risk Level, Scope details, Parameters
 
-**Prompt for Export**: Use the `-PromptForExport` switch parameter to be asked before exporting:
+**Examples**:
 ```powershell
-.\Get-PolicyAssignments.ps1 -PromptForExport
+# Export with default timestamped filename
+.\Get-PolicyAssignments.ps1 -Export
+
+# Export with custom filename
+.\Get-PolicyAssignments.ps1 -Export -FileName "Q4-PolicyAudit.csv"
+
+# Export with date-based filename
+.\Get-PolicyAssignments.ps1 -Export -FileName "Policies_$(Get-Date -Format 'yyyy-MM-dd').csv"
 ```
 
 ## Troubleshooting
@@ -221,7 +240,11 @@ Review the console output to identify where policies are actually assigned.
 2. **Policy Cleanup**: Identify duplicate or unnecessary policy assignments
 3. **Compliance Reporting**: Document current policy governance structure
 4. **Migration Planning**: Map policies before restructuring management groups
-5. **Security Assessment**: Review security policies across organizational hierarchy
+5. **Security Assessment**: Review security policies across organizational hierarchy with detailed security posture analysis showing:
+   - Which high-impact security policies are deployed
+   - Effect types (Deny, DeployIfNotExists, Modify) and enforcement status
+   - Gaps in security controls compared to Azure Landing Zone best practices
+   - Critical areas covered (network security, encryption, access control, backup/DR)
 6. **Impact Analysis**: Evaluate cost, security, and compliance impact of current policy assignments
 7. **Azure Landing Zone Validation**: Compare deployed policies against ALZ recommendations
 8. **Risk Assessment**: Identify high-risk policy configurations and enforcement gaps
