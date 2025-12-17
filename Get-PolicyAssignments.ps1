@@ -344,11 +344,40 @@ function Get-PolicyRecommendation {
 
 # Get all management groups recursively (including children)
 $allManagementGroups = @()
-$rootMgs = Get-AzManagementGroup
+try {
+    $rootMgs = Get-AzManagementGroup -ErrorAction Stop
+}
+catch {
+    Write-Host "`n❌ ERROR: Unable to retrieve management groups." -ForegroundColor Red
+    Write-Host "   Reason: $($_.Exception.Message)" -ForegroundColor Yellow
+    
+    if ($_.Exception.Message -like "*Authorization*" -or $_.Exception.Message -like "*permission*" -or $_.Exception.Message -like "*forbidden*" -or $_.Exception.Message -like "*denied*") {
+        Write-Host "`n   PERMISSION ISSUE DETECTED:" -ForegroundColor Cyan
+        Write-Host "   - You need 'Reader' access or higher on management groups" -ForegroundColor Gray
+        Write-Host "   - Typically requires 'Management Group Reader' role at tenant root level" -ForegroundColor Gray
+        Write-Host "   - Contact your Azure administrator to grant appropriate access" -ForegroundColor Gray
+    }
+    
+    Write-Host "`n   Run 'Connect-AzAccount' if you're not authenticated." -ForegroundColor Gray
+    return
+}
+
+if (-not $rootMgs) {
+    Write-Host "`n❌ No management groups found." -ForegroundColor Red
+    Write-Host "   - Ensure you have appropriate permissions" -ForegroundColor Yellow
+    Write-Host "   - This script is designed for Azure Landing Zone management group structures" -ForegroundColor Yellow
+    return
+}
 
 foreach ($rootMg in $rootMgs) {
     # Get the management group with expanded children
-    $mgWithChildren = Get-AzManagementGroup -GroupId $rootMg.Name -Expand -Recurse
+    try {
+        $mgWithChildren = Get-AzManagementGroup -GroupId $rootMg.Name -Expand -Recurse -ErrorAction Stop
+    }
+    catch {
+        Write-Host "⚠️  Warning: Cannot expand management group '$($rootMg.DisplayName)' - $($_.Exception.Message)" -ForegroundColor Yellow
+        continue
+    }
     
     # Add root MG
     $allManagementGroups += $mgWithChildren
@@ -369,6 +398,7 @@ foreach ($rootMg in $rootMgs) {
 }
 
 Write-Host "Found $($allManagementGroups.Count) management group(s):" -ForegroundColor Cyan
+Write-Host "(This script is optimized for Azure Landing Zone structures)" -ForegroundColor DarkGray
 foreach ($mg in $allManagementGroups) {
     Write-Host "  - $($mg.DisplayName) ($($mg.Name))" -ForegroundColor Gray
 }
@@ -383,7 +413,18 @@ foreach ($mg in $allManagementGroups) {
     Write-Host "`n  Processing MG: $($mg.DisplayName) ($($mg.Name))" -ForegroundColor Yellow
     
     # Get policy assignments directly assigned to this management group (not inherited)
-    $mgAssignments = Get-AzPolicyAssignment -Scope "/providers/Microsoft.Management/managementGroups/$($mg.Name)" -ErrorAction SilentlyContinue
+    try {
+        $mgAssignments = Get-AzPolicyAssignment -Scope "/providers/Microsoft.Management/managementGroups/$($mg.Name)" -ErrorAction Stop
+    }
+    catch {
+        if ($_.Exception.Message -like "*Authorization*" -or $_.Exception.Message -like "*permission*" -or $_.Exception.Message -like "*forbidden*") {
+            Write-Host "    ⚠️  Access Denied: Insufficient permissions to read policies on this management group" -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "    ⚠️  Error: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+        continue
+    }
     
     if ($mgAssignments) {
         Write-Host "    Total assignments found (including inherited): $($mgAssignments.Count)" -ForegroundColor DarkGray

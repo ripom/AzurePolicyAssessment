@@ -4,6 +4,37 @@
 
 This PowerShell script analyzes Azure Policy assignments across all management groups in an Azure tenant. It retrieves policy assignments directly assigned to each management group, excluding inherited policies from parent management groups, providing a clear view of the policy governance structure.
 
+**IMPORTANT**: This script is specifically designed for and optimized for **Azure Landing Zone (ALZ) management group structures**. All recommendations and gap analysis are based on the standard ALZ architecture. The script will work with any management group hierarchy, but the policy recommendations are most meaningful when applied to an ALZ-compliant structure.
+
+### Azure Landing Zone Management Group Structure
+
+This script is designed to work with the standard Azure Landing Zone management group hierarchy:
+
+```
+Tenant Root Group
+│
+└── <Organization> (e.g., Contoso)
+    │
+    ├── Platform
+    │   ├── Management
+    │   ├── Connectivity
+    │   └── Identity
+    │
+    ├── Landing Zones
+    │   ├── Corp (Corporate workloads)
+    │   └── Online (Internet-facing workloads)
+    │
+    ├── Sandboxes (Innovation/testing)
+    │
+    └── Decommissioned (Workloads being retired)
+```
+
+**Why ALZ Structure Matters**:
+- Policy recommendations are tailored to each management group type (Platform, Landing Zones, etc.)
+- The script validates against ALZ best practices and standard policy assignments
+- Gap analysis identifies missing policies based on ALZ reference implementation
+- Without an ALZ structure, many recommendations may not be applicable to your environment
+
 ## Features
 
 - **Multi-Tenant Support**: Select from multiple Azure tenants you have access to
@@ -45,6 +76,8 @@ The account running the script needs:
 - **Reader** access or higher on management groups
 - **Reader** access on policy assignments
 - Typically requires at least **Management Group Reader** role at the tenant root level
+
+**Permission Errors**: If you encounter permission errors, the script will provide specific guidance on required roles. Contact your Azure administrator to grant appropriate access.
 
 ## Usage
 
@@ -213,14 +246,35 @@ if ($assignment.Scope -eq "/providers/Microsoft.Management/managementGroups/$($m
 **Issue**: "Not logged in to Azure"
 - **Solution**: Run `Connect-AzAccount` before executing the script
 
+**Issue**: "ERROR: Unable to retrieve management groups" or "Access Denied" messages
+- **Solution**: 
+  - Verify you have at least **Reader** permissions on management groups
+  - Contact your Azure administrator to grant **Management Group Reader** role at tenant root level
+  - The script will provide specific guidance when permission errors are detected
+
 **Issue**: "No management groups found"
-- **Solution**: Verify you have at least Reader permissions on management groups
+- **Solution**: 
+  - Verify you have appropriate permissions on management groups
+  - Ensure your Azure environment has management groups configured
+  - This script is designed for Azure Landing Zone structures - verify ALZ implementation
 
 **Issue**: Script shows 0 assignments
 - **Solution**: Check if policies are assigned at subscription or resource group level instead of management groups
 
 **Issue**: Missing expected management groups
-- **Solution**: Ensure you selected the correct tenant and have appropriate permissions
+- **Solution**: Ensure you selected the correct tenant and have appropriate permissions to view all management groups
+
+**Issue**: Many policies show as "MISSING" despite being deployed
+- **Solution**: 
+  - This is expected if your environment doesn't follow the standard Azure Landing Zone structure
+  - Policy recommendations are based on ALZ best practices
+  - If you're not using ALZ, use the CSV export to analyze your actual policy coverage
+
+**Issue**: Recommendations don't seem relevant to your environment
+- **Solution**: 
+  - This script is optimized for **Azure Landing Zone management group structures**
+  - If you're not using ALZ, focus on the direct assignment data rather than gap analysis
+  - Consider implementing ALZ structure for enterprise-grade governance
 
 **Issue**: Parameters column shows "(no parameters)" for most policies
 - **Solution**: This is a known limitation. The Azure PowerShell `Get-AzPolicyAssignment` cmdlet's `Parameter` property is often empty or incomplete due to API restrictions. The script attempts to extract parameter values but Azure's API doesn't always expose them through standard PowerShell cmdlets. To view full parameter details, check the Azure Portal or use Azure Resource Graph queries.
@@ -255,6 +309,7 @@ Review the console output to identify where policies are actually assigned.
 - Requires appropriate Azure permissions to read management groups and policies
 - Large tenants with many management groups may take time to process
 - Parameter values may show "(no parameters)" for some policies due to Azure API limitations
+- **Policy recommendations and gap analysis are based on Azure Landing Zone structure** - results are most meaningful in ALZ-compliant environments
 - Azure Landing Zone validation requires internet connectivity to fetch latest policies from the official [Azure Landing Zones Library](https://github.com/Azure/Azure-Landing-Zones-Library) (falls back to cached list if offline)
 
 ## Version History
