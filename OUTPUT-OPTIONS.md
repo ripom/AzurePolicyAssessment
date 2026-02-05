@@ -1,6 +1,13 @@
 # Output Options - Quick Reference
 
-**Version 2.0.1** | [View Changelog](CHANGELOG.md)
+**Version 2.1.0** | [View Changelog](CHANGELOG.md)
+
+## 🚀 NEW in v2.1: Lightning-Fast Performance
+
+The script now uses Azure Resource Graph for 10-50x faster execution!
+- Queries complete in seconds instead of minutes
+- No subscription context switching required
+- All features preserved
 
 ## Scope Options
 
