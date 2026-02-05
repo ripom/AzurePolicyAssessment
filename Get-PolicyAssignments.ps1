@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Lists all Azure Policy assignments from all management groups with detailed information.
+    Lists all Azure Policy assignments from all management groups with detailed information and regulatory compliance assessment.
 
 .DESCRIPTION
     This script retrieves all Azure Policy assignments from all management groups in the tenant
@@ -27,20 +27,48 @@
     Custom filename for the CSV export. If not provided, uses default timestamped format:
     PolicyAssignments_YYYYMMDD_HHMMSS.csv. Only used when -Export is specified.
 
+.PARAMETER IncludeSubscriptions
+    When specified, includes policy assignments from all subscriptions in addition to management groups.
+
+.PARAMETER IncludeResourceGroups
+    When specified, includes policy assignments from all resource groups. Requires -IncludeSubscriptions to be effective.
+
 .EXAMPLE
     .\Get-PolicyAssignments.ps1
+    Lists all policy assignments across all management groups.
     
 .EXAMPLE
     .\Get-PolicyAssignments.ps1 -ShowRecommendations
+    Lists all policies with detailed impact analysis and recommendations.
 
 .EXAMPLE
     .\Get-PolicyAssignments.ps1 -Export
+    Lists all policies and exports to timestamped CSV file.
 
 .EXAMPLE
     .\Get-PolicyAssignments.ps1 -Export -FileName "MyPolicyReport.csv"
+    Lists all policies and exports to custom filename.
 
 .EXAMPLE
     .\Get-PolicyAssignments.ps1 -ShowRecommendations -Export -FileName "PolicyAudit_$(Get-Date -Format 'yyyy-MM').csv"
+    Lists all policies with recommendations and exports to custom dated filename.
+
+.NOTES
+    Version: 2.0.0
+    Last Updated: February 5, 2026
+    Author: Azure Policy Assessment Tool
+    
+    Requires Azure PowerShell modules: Az.Accounts, Az.Resources, Az.PolicyInsights
+    Requires appropriate Azure RBAC permissions (typically Management Group Reader)
+    For compliance data, policies must be assigned and evaluated (may take time for new assignments)
+    
+    Version History:
+    - 2.0.0 (2026-02-05): Enhanced with subscription/RG enumeration, multi-tenant support,
+                          accurate compliance data using PolicyAssignmentName filter,
+                          progress bars, and improved ALZ recommendations
+    - 1.0.0 (Initial): Azure Landing Zone policy assessment with ALZ Library integration
+                       Impact analysis and gap detection
+                       CSV export functionality
 #>
 
 [CmdletBinding()]
@@ -52,8 +80,24 @@ param(
     [switch]$Export,
     
     [Parameter(Mandatory=$false)]
-    [string]$FileName
+    [string]$FileName,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$IncludeSubscriptions,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$IncludeResourceGroups
 )
+
+# Script Version
+$ScriptVersion = "2.0.0"
+$ScriptLastUpdated = "2026-02-05"
+
+# Display version banner
+Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "  Azure Policy & Compliance Assessment Tool" -ForegroundColor Cyan
+Write-Host "  Version: $ScriptVersion | Last Updated: $ScriptLastUpdated" -ForegroundColor Cyan
+Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
 
 # Requires Azure PowerShell module
 # Install-Module -Name Az.Resources -Force -AllowClobber
@@ -104,7 +148,7 @@ if ($selection -match '^\d+$' -and [int]$selection -ge 1 -and [int]$selection -l
     exit
 }
 
-Write-Host "`nRetrieving all management groups..." -ForegroundColor Cyan
+#region Function Definitions
 
 # Function to get Azure Landing Zone recommended policies from GitHub
 function Get-ALZRecommendedPolicies {
@@ -342,6 +386,23 @@ function Get-PolicyRecommendation {
     return $recommendation
 }
 
+#endregion Function Definitions
+
+
+Write-Host "`nRetrieving all management groups..." -ForegroundColor Cyan
+
+# Get current tenant context to enforce tenant boundary
+$currentContext = Get-AzContext
+if (-not $currentContext) {
+    Write-Host "`n❌ ERROR: Not connected to Azure. Run 'Connect-AzAccount' first." -ForegroundColor Red
+    return
+}
+
+$currentTenantId = $currentContext.Tenant.Id
+Write-Host "Current Tenant ID: $currentTenantId" -ForegroundColor Gray
+Write-Host "Subscription in context: $($currentContext.Subscription.Name) ($($currentContext.Subscription.Id))" -ForegroundColor Gray
+Write-Host "" # Blank line
+
 # Get all management groups recursively (including children)
 $allManagementGroups = @()
 try {
@@ -409,7 +470,14 @@ $results = @()
 Write-Host "`nRetrieving policy assignments for each management group..." -ForegroundColor Cyan
 
 # Process each management group
+$mgCount = 0
+$totalMgs = $allManagementGroups.Count
+
 foreach ($mg in $allManagementGroups) {
+    $mgCount++
+    $percentComplete = [math]::Round(($mgCount / $totalMgs) * 100, 2)
+    Write-Progress -Activity "Processing Policy Assignments" -Status "Management Group: $($mg.DisplayName) ($mgCount of $totalMgs)" -PercentComplete $percentComplete -Id 1
+    
     Write-Host "`n  Processing MG: $($mg.DisplayName) ($($mg.Name))" -ForegroundColor Yellow
     
     # Get policy assignments directly assigned to this management group (not inherited)
@@ -514,13 +582,15 @@ foreach ($mg in $allManagementGroups) {
                 # Get recommendations
                 $recommendationObj = Get-PolicyRecommendation -PolicyName $policyDefName -EffectType $effectType -EnforcementMode $enforcementMode -PolicyType $policyType
                 
-                # Create custom object
-                $results += [PSCustomObject]@{
+                # Create custom object first (to ensure all policies are captured)
+                $policyResult = [PSCustomObject]@{
                     'Assignment Name'     = $assignment.Name
                     'Display Name'        = $assignment.DisplayName
                     'Policy Type'         = $policyType
                     'Effect Type'         = $effectType
                     'Enforcement Mode'    = $enforcementMode
+                    'Non-Compliant Resources' = 0
+                    'Non-Compliant Policies' = 0
                     'Security Impact'     = $recommendationObj.SecurityImpact
                     'Cost Impact'         = $recommendationObj.CostImpact
                     'Compliance Impact'   = $recommendationObj.ComplianceImpact
@@ -534,6 +604,70 @@ foreach ($mg in $allManagementGroups) {
                     'Recommendation'      = $recommendationObj.Recommendation
                     'Scope'               = $assignment.Scope
                 }
+                
+                # Add to results immediately
+                $results += $policyResult
+                
+                # Now try to fetch compliance data using the assignment name directly
+                try {
+                    $isMgScope = $assignment.Scope -like "*/managementGroups/*"
+                    $mgNameForQuery = if ($isMgScope) { $assignment.Scope -replace '.*/managementGroups/', '' } else { $null }
+                    $defId = $assignment.PolicyDefinitionId
+                    $assignmentName = $assignment.Name
+                    
+                    # Use PolicyAssignmentName filter which is more reliable than PolicyDefinitionId
+                    $filterQuery = "PolicyAssignmentName eq '$assignmentName'"
+                    
+                    $summary = $null
+                    if ($filterQuery) {
+                        if ($isMgScope) {
+                            $summary = Get-AzPolicyStateSummary -ManagementGroupName $mgNameForQuery -Filter $filterQuery -ErrorAction SilentlyContinue
+                        } else {
+                            $subIdForQuery = if ($assignment.Scope -match '/subscriptions/([^/]+)') { $matches[1] } else { (Get-AzContext).Subscription.Id }
+                            $summary = Get-AzPolicyStateSummary -SubscriptionId $subIdForQuery -Filter $filterQuery -ErrorAction SilentlyContinue
+                        }
+                    }
+
+                    if ($summary -and $summary.Results) {
+                        # Get non-compliant resources count
+                        $policyResult.'Non-Compliant Resources' = if ($summary.Results.PSObject.Properties['NonCompliantResources']) {
+                            $summary.Results.NonCompliantResources
+                        } else { 0 }
+                        
+                        # Get non-compliant policies count (for Initiatives only)
+                        if ($defId -like "*policySetDefinitions*") {
+                            # For Initiatives, get the count of individual policies that are non-compliant
+                            try {
+                                $policyStates = if ($isMgScope) {
+                                    Get-AzPolicyState -ManagementGroupName $mgNameForQuery -Filter $filterQuery -ErrorAction SilentlyContinue
+                                } else {
+                                    $subIdForQuery = if ($assignment.Scope -match '/subscriptions/([^/]+)') { $matches[1] } else { (Get-AzContext).Subscription.Id }
+                                    Get-AzPolicyState -SubscriptionId $subIdForQuery -Filter $filterQuery -ErrorAction SilentlyContinue
+                                }
+                                
+                                if ($policyStates) {
+                                    # Count unique non-compliant policy definition IDs
+                                    $nonCompliantPolicies = $policyStates | 
+                                        Where-Object { $_.ComplianceState -eq 'NonCompliant' } | 
+                                        Select-Object -ExpandProperty PolicyDefinitionId -Unique
+                                    $policyResult.'Non-Compliant Policies' = ($nonCompliantPolicies | Measure-Object).Count
+                                } else {
+                                    $policyResult.'Non-Compliant Policies' = 0
+                                }
+                            } catch {
+                                # Fallback to summary if available
+                                $policyResult.'Non-Compliant Policies' = if ($summary.Results.PSObject.Properties['NonCompliantPolicies']) {
+                                    $summary.Results.NonCompliantPolicies
+                                } else { 0 }
+                            }
+                        } else {
+                            # For single policies, non-compliant policies is always 0 or 1
+                            $policyResult.'Non-Compliant Policies' = if ($policyResult.'Non-Compliant Resources' -gt 0) { 1 } else { 0 }
+                        }
+                    }
+                } catch {
+                    # Silently continue - compliance data is optional
+                }
             } else {
                 Write-Host "      - Inherited: $($assignment.Name) (from $($assignment.Scope))" -ForegroundColor DarkGray
             }
@@ -544,10 +678,384 @@ foreach ($mg in $allManagementGroups) {
     }
 }
 
+Write-Progress -Activity "Processing Policy Assignments" -Completed -Id 1
+Write-Host "`nProcessing Management Groups complete!" -ForegroundColor Cyan
+
+# Enumerate Subscription-level assignments if requested
+if ($IncludeSubscriptions) {
+    Write-Host "`n═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "  SUBSCRIPTION-LEVEL POLICY ASSIGNMENTS" -ForegroundColor Cyan
+    Write-Host "═══════════════════════════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+    
+    # Get subscriptions only from the current tenant
+    $allSubs = Get-AzSubscription -ErrorAction SilentlyContinue | Where-Object { $_.TenantId -eq $currentTenantId }
+    
+    if (-not $allSubs) {
+        Write-Host "No subscriptions found in the current tenant ($currentTenantId)" -ForegroundColor Yellow
+    } else {
+        Write-Host "Found $($allSubs.Count) subscription(s) in current tenant" -ForegroundColor Gray
+    }
+    
+    $subCount = 0
+    $totalSubs = ($allSubs | Measure-Object).Count
+    
+    foreach ($sub in $allSubs) {
+        $subCount++
+        $percentComplete = [math]::Round(($subCount / $totalSubs) * 100, 2)
+        Write-Progress -Activity "Processing Subscription Assignments" -Status "Subscription: $($sub.Name) ($subCount of $totalSubs)" -PercentComplete $percentComplete -Id 2
+        
+        Write-Host "Processing Subscription: $($sub.Name) ($($sub.Id))" -ForegroundColor Yellow
+        
+        try {
+            Set-AzContext -SubscriptionId $sub.Id -ErrorAction Stop | Out-Null
+            
+            $subScope = "/subscriptions/$($sub.Id)"
+            $subAssignments = Get-AzPolicyAssignment -Scope $subScope -ErrorAction SilentlyContinue
+            
+            $directSubAssignments = 0
+            
+            if ($subAssignments) {
+                foreach ($assignment in $subAssignments) {
+                    # Only include direct assignments to this subscription
+                    if ($assignment.Scope -eq $subScope) {
+                        $directSubAssignments++
+                        Write-Host "  ✓ Direct: $($assignment.Name)" -ForegroundColor Green
+                        
+                        # Determine policy type
+                        $policyType = if ($assignment.PolicyDefinitionId -match '/policySetDefinitions/') {
+                            "Initiative"
+                        } else {
+                            "Policy"
+                        }
+                        
+                        # Extract policy definition name
+                        $policyDefId = $assignment.PolicyDefinitionId
+                        $policyDefName = if ($policyDefId -match '/([^/]+)$') {
+                            $Matches[1]
+                        } else {
+                            $policyDefId
+                        }
+                        
+                        # Get enforcement mode
+                        $enforcementMode = "Default"
+                        if ($assignment.PSObject.Properties['EnforcementMode']) {
+                            $enforcementMode = $assignment.EnforcementMode
+                        } elseif ($assignment.PSObject.Properties['Properties'] -and $assignment.Properties.PSObject.Properties['EnforcementMode']) {
+                            $enforcementMode = $assignment.Properties.EnforcementMode
+                        }
+                        
+                        # Get effect type
+                        $effectType = "(not specified)"
+                        if ($assignment.PSObject.Properties['Parameter'] -and $assignment.Parameter) {
+                            if ($assignment.Parameter.PSObject.Properties['effect']) {
+                                $effectType = $assignment.Parameter.effect.value
+                            }
+                        }
+                        
+                        # Extract parameters
+                        $parametersString = "(no parameters)"
+                        if ($assignment.PSObject.Properties['Parameter'] -and $assignment.Parameter) {
+                            $paramList = @()
+                            $assignment.Parameter.PSObject.Properties | ForEach-Object {
+                                $paramName = $_.Name
+                                $paramValue = $_.Value.value
+                                if ($paramValue -is [array]) {
+                                    $paramValue = '["' + ($paramValue -join '","') + '"]'
+                                } elseif ($null -eq $paramValue) {
+                                    $paramValue = "(null)"
+                                } else {
+                                    $paramValue = $paramValue.ToString()
+                                }
+                                $paramList += "$paramName=$paramValue"
+                            }
+                            if ($paramList.Count -gt 0) {
+                                $parametersString = $paramList -join '; '
+                            }
+                        }
+                        
+                        # Get recommendations
+                        $recommendationObj = Get-PolicyRecommendation -PolicyName $policyDefName -EffectType $effectType -EnforcementMode $enforcementMode -PolicyType $policyType
+                        
+                        # Create policy result object
+                        $policyResult = [PSCustomObject]@{
+                            'Assignment Name'          = $assignment.Name
+                            'Display Name'             = $assignment.DisplayName
+                            'Policy Type'              = $policyType
+                            'Effect Type'              = $effectType
+                            'Enforcement Mode'         = $enforcementMode
+                            'Non-Compliant Resources'  = 0
+                            'Non-Compliant Policies'   = 0
+                            'Security Impact'          = $recommendationObj.SecurityImpact
+                            'Cost Impact'              = $recommendationObj.CostImpact
+                            'Compliance Impact'        = $recommendationObj.ComplianceImpact
+                            'Operational Overhead'     = $recommendationObj.OperationalOverhead
+                            'Risk Level'               = $recommendationObj.RiskLevel
+                            'Scope Type'               = "Subscription"
+                            'Scope Name'               = $sub.Name
+                            'Management Group ID'      = $sub.Id
+                            'Policy Name'              = $policyDefName
+                            'Parameters'               = $parametersString
+                            'Recommendation'           = $recommendationObj.Recommendation
+                            'Scope'                    = $assignment.Scope
+                        }
+                        
+                        $results += $policyResult
+                        
+                        # Fetch compliance data for subscription assignment
+                        try {
+                            $defId = $assignment.PolicyDefinitionId
+                            $assignmentName = $assignment.Name
+                            
+                            # Use PolicyAssignmentName filter which is more reliable
+                            $filterQuery = "PolicyAssignmentName eq '$assignmentName'"
+                            
+                            if ($filterQuery) {
+                                $summary = Get-AzPolicyStateSummary -SubscriptionId $sub.Id -Filter $filterQuery -ErrorAction SilentlyContinue
+                                
+                                if ($summary -and $summary.Results) {
+                                    # Get non-compliant resources count
+                                    $policyResult.'Non-Compliant Resources' = if ($summary.Results.PSObject.Properties['NonCompliantResources']) {
+                                        $summary.Results.NonCompliantResources
+                                    } else { 0 }
+                                    
+                                    # Get non-compliant policies count (for Initiatives only)
+                                    if ($defId -like "*policySetDefinitions*") {
+                                        # For Initiatives, get the count of individual policies that are non-compliant
+                                        try {
+                                            $policyStates = Get-AzPolicyState -SubscriptionId $sub.Id -Filter $filterQuery -ErrorAction SilentlyContinue
+                                            
+                                            if ($policyStates) {
+                                                # Count unique non-compliant policy definition IDs
+                                                $nonCompliantPolicies = $policyStates | 
+                                                    Where-Object { $_.ComplianceState -eq 'NonCompliant' } | 
+                                                    Select-Object -ExpandProperty PolicyDefinitionId -Unique
+                                                $policyResult.'Non-Compliant Policies' = ($nonCompliantPolicies | Measure-Object).Count
+                                            } else {
+                                                $policyResult.'Non-Compliant Policies' = 0
+                                            }
+                                        } catch {
+                                            # Fallback to summary if available
+                                            $policyResult.'Non-Compliant Policies' = if ($summary.Results.PSObject.Properties['NonCompliantPolicies']) {
+                                                $summary.Results.NonCompliantPolicies
+                                            } else { 0 }
+                                        }
+                                    } else {
+                                        # For single policies, non-compliant policies is always 0 or 1
+                                        $policyResult.'Non-Compliant Policies' = if ($policyResult.'Non-Compliant Resources' -gt 0) { 1 } else { 0 }
+                                    }
+                                }
+                            }
+                        } catch {
+                            # Silently continue - compliance data is optional
+                        }
+                    }
+                }
+            }
+            
+            Write-Host "  Direct assignments: $directSubAssignments" -ForegroundColor Cyan
+        }
+        catch {
+            Write-Host "  ⚠️ Error accessing subscription: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    
+    Write-Progress -Activity "Processing Subscription Assignments" -Completed -Id 2
+}
+
+# Enumerate Resource Group-level assignments if requested
+if ($IncludeResourceGroups -and $IncludeSubscriptions) {
+    Write-Host "`n═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "  RESOURCE GROUP-LEVEL POLICY ASSIGNMENTS" -ForegroundColor Cyan
+    Write-Host "═══════════════════════════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+    
+    # Get subscriptions only from the current tenant
+    $allSubs = Get-AzSubscription -ErrorAction SilentlyContinue | Where-Object { $_.TenantId -eq $currentTenantId }
+    
+    if (-not $allSubs) {
+        Write-Host "No subscriptions found in the current tenant ($currentTenantId)" -ForegroundColor Yellow
+    } else {
+        Write-Host "Found $($allSubs.Count) subscription(s) in current tenant" -ForegroundColor Gray
+    }
+    
+    $rgSubCount = 0
+    $totalRgSubs = ($allSubs | Measure-Object).Count
+    
+    foreach ($sub in $allSubs) {
+        $rgSubCount++
+        Write-Progress -Activity "Processing Resource Group Assignments" -Status "Subscription: $($sub.Name) ($rgSubCount of $totalRgSubs)" -PercentComplete ([math]::Round(($rgSubCount / $totalRgSubs) * 100, 2)) -Id 3
+        
+        try {
+            Set-AzContext -SubscriptionId $sub.Id -ErrorAction Stop | Out-Null
+            
+            $resourceGroups = Get-AzResourceGroup -ErrorAction SilentlyContinue
+            
+            if ($resourceGroups) {
+                foreach ($rg in $resourceGroups) {
+                    $rgScope = "/subscriptions/$($sub.Id)/resourceGroups/$($rg.ResourceGroupName)"
+                    $rgAssignments = Get-AzPolicyAssignment -Scope $rgScope -ErrorAction SilentlyContinue
+                    
+                    $directRgAssignments = 0
+                    
+                    if ($rgAssignments) {
+                        foreach ($assignment in $rgAssignments) {
+                            # Only include direct assignments to this RG
+                            if ($assignment.Scope -eq $rgScope) {
+                                if ($directRgAssignments -eq 0) {
+                                    Write-Host "Subscription: $($sub.Name) / RG: $($rg.ResourceGroupName)" -ForegroundColor Yellow
+                                }
+                                
+                                $directRgAssignments++
+                                Write-Host "  ✓ Direct: $($assignment.Name)" -ForegroundColor Green
+                                
+                                # Determine policy type
+                                $policyType = if ($assignment.PolicyDefinitionId -match '/policySetDefinitions/') {
+                                    "Initiative"
+                                } else {
+                                    "Policy"
+                                }
+                                
+                                # Extract policy definition name
+                                $policyDefId = $assignment.PolicyDefinitionId
+                                $policyDefName = if ($policyDefId -match '/([^/]+)$') {
+                                    $Matches[1]
+                                } else {
+                                    $policyDefId
+                                }
+                                
+                                # Get enforcement mode
+                                $enforcementMode = "Default"
+                                if ($assignment.PSObject.Properties['EnforcementMode']) {
+                                    $enforcementMode = $assignment.EnforcementMode
+                                } elseif ($assignment.PSObject.Properties['Properties'] -and $assignment.Properties.PSObject.Properties['EnforcementMode']) {
+                                    $enforcementMode = $assignment.Properties.EnforcementMode
+                                }
+                                
+                                # Get effect type
+                                $effectType = "(not specified)"
+                                if ($assignment.PSObject.Properties['Parameter'] -and $assignment.Parameter) {
+                                    if ($assignment.Parameter.PSObject.Properties['effect']) {
+                                        $effectType = $assignment.Parameter.effect.value
+                                    }
+                                }
+                                
+                                # Extract parameters
+                                $parametersString = "(no parameters)"
+                                if ($assignment.PSObject.Properties['Parameter'] -and $assignment.Parameter) {
+                                    $paramList = @()
+                                    $assignment.Parameter.PSObject.Properties | ForEach-Object {
+                                        $paramName = $_.Name
+                                        $paramValue = $_.Value.value
+                                        if ($paramValue -is [array]) {
+                                            $paramValue = '["' + ($paramValue -join '","') + '"]'
+                                        } elseif ($null -eq $paramValue) {
+                                            $paramValue = "(null)"
+                                        } else {
+                                            $paramValue = $paramValue.ToString()
+                                        }
+                                        $paramList += "$paramName=$paramValue"
+                                    }
+                                    if ($paramList.Count -gt 0) {
+                                        $parametersString = $paramList -join '; '
+                                    }
+                                }
+                                
+                                # Get recommendations
+                                $recommendationObj = Get-PolicyRecommendation -PolicyName $policyDefName -EffectType $effectType -EnforcementMode $enforcementMode -PolicyType $policyType
+                                
+                                # Create policy result object
+                                $policyResult = [PSCustomObject]@{
+                                    'Assignment Name'          = $assignment.Name
+                                    'Display Name'             = $assignment.DisplayName
+                                    'Policy Type'              = $policyType
+                                    'Effect Type'              = $effectType
+                                    'Enforcement Mode'         = $enforcementMode
+                                    'Non-Compliant Resources'  = 0
+                                    'Non-Compliant Policies'   = 0
+                                    'Security Impact'          = $recommendationObj.SecurityImpact
+                                    'Cost Impact'              = $recommendationObj.CostImpact
+                                    'Compliance Impact'        = $recommendationObj.ComplianceImpact
+                                    'Operational Overhead'     = $recommendationObj.OperationalOverhead
+                                    'Risk Level'               = $recommendationObj.RiskLevel
+                                    'Scope Type'               = "Resource Group"
+                                    'Scope Name'               = $rg.ResourceGroupName
+                                    'Management Group ID'      = $sub.Name
+                                    'Policy Name'              = $policyDefName
+                                    'Parameters'               = $parametersString
+                                    'Recommendation'           = $recommendationObj.Recommendation
+                                    'Scope'                    = $assignment.Scope
+                                }
+                                
+                                $results += $policyResult
+                                
+                                # Fetch compliance data for RG assignment
+                                try {
+                                    $defId = $assignment.PolicyDefinitionId
+                                    $assignmentName = $assignment.Name
+                                    
+                                    # Use PolicyAssignmentName filter which is more reliable
+                                    $filterQuery = "PolicyAssignmentName eq '$assignmentName'"
+                                    
+                                    if ($filterQuery) {
+                                        $summary = Get-AzPolicyStateSummary -SubscriptionId $sub.Id -Filter $filterQuery -ErrorAction SilentlyContinue
+                                        
+                                        if ($summary -and $summary.Results) {
+                                            # Get non-compliant resources count
+                                            $policyResult.'Non-Compliant Resources' = if ($summary.Results.PSObject.Properties['NonCompliantResources']) {
+                                                $summary.Results.NonCompliantResources
+                                            } else { 0 }
+                                            
+                                            # Get non-compliant policies count (for Initiatives only)
+                                            if ($defId -like "*policySetDefinitions*") {
+                                                # For Initiatives, get the count of individual policies that are non-compliant
+                                                try {
+                                                    $policyStates = Get-AzPolicyState -SubscriptionId $sub.Id -Filter $filterQuery -ErrorAction SilentlyContinue
+                                                    
+                                                    if ($policyStates) {
+                                                        # Count unique non-compliant policy definition IDs
+                                                        $nonCompliantPolicies = $policyStates | 
+                                                            Where-Object { $_.ComplianceState -eq 'NonCompliant' } | 
+                                                            Select-Object -ExpandProperty PolicyDefinitionId -Unique
+                                                        $policyResult.'Non-Compliant Policies' = ($nonCompliantPolicies | Measure-Object).Count
+                                                    } else {
+                                                        $policyResult.'Non-Compliant Policies' = 0
+                                                    }
+                                                } catch {
+                                                    # Fallback to summary if available
+                                                    $policyResult.'Non-Compliant Policies' = if ($summary.Results.PSObject.Properties['NonCompliantPolicies']) {
+                                                        $summary.Results.NonCompliantPolicies
+                                                    } else { 0 }
+                                                }
+                                            } else {
+                                                # For single policies, non-compliant policies is always 0 or 1
+                                                $policyResult.'Non-Compliant Policies' = if ($policyResult.'Non-Compliant Resources' -gt 0) { 1 } else { 0 }
+                                            }
+                                        }
+                                    }
+                                } catch {
+                                    # Silently continue - compliance data is optional
+                                }
+                            }
+                        }
+                        
+                        if ($directRgAssignments -gt 0) {
+                            Write-Host "  Direct assignments: $directRgAssignments" -ForegroundColor Cyan
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Host "  ⚠️ Error accessing subscription for RG enumeration: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    
+    Write-Progress -Activity "Processing Resource Group Assignments" -Completed -Id 3
+}
+
 Write-Host "`nProcessing complete!" -ForegroundColor Cyan
 
 # Display results in table format
-Write-Host "`nPolicy Assignments by Management Group:" -ForegroundColor Cyan
+Write-Host "`nPolicy Assignments Summary:" -ForegroundColor Cyan
 $results | Format-Table -AutoSize
 
 # Generate overall recommendations if switch is enabled
@@ -677,12 +1185,25 @@ if ($ShowRecommendations) {
     
     # Security posture assessment
     Write-Host "`n🔒 SECURITY POSTURE:" -ForegroundColor Yellow
-    if ($highSecurityPolicies -gt 10) {
-        Write-Host "   Strong - $highSecurityPolicies high-impact security policies in place." -ForegroundColor Green
-    } elseif ($highSecurityPolicies -gt 5) {
-        Write-Host "   Moderate - $highSecurityPolicies high-impact security policies. Consider adding more." -ForegroundColor Yellow
+    
+    # Combine security assessment with ALZ gap analysis
+    $alzGapCount = $missingCriticalPolicies.Count
+    $totalSecurityGaps = $alzGapCount
+    
+    if ($highSecurityPolicies -gt 10 -and $alzGapCount -eq 0) {
+        Write-Host "   ✓ Strong - $highSecurityPolicies high-impact security policies in place with good ALZ coverage." -ForegroundColor Green
+    } elseif ($highSecurityPolicies -gt 5 -and $alzGapCount -lt 10) {
+        Write-Host "   Moderate - $highSecurityPolicies high-impact security policies deployed." -ForegroundColor Yellow
+        if ($alzGapCount -gt 0) {
+            Write-Host "   However, $alzGapCount Azure Landing Zone recommended policies are missing." -ForegroundColor Yellow
+        }
     } else {
-        Write-Host "   Weak - Only $highSecurityPolicies high-impact security policies. Requires attention." -ForegroundColor Red
+        Write-Host "   ⚠️  Weak - Security posture requires immediate attention." -ForegroundColor Red
+        Write-Host "      • Only $highSecurityPolicies high-impact security policies deployed" -ForegroundColor Red
+        if ($alzGapCount -gt 0) {
+            Write-Host "      • $alzGapCount Azure Landing Zone recommended policies missing" -ForegroundColor Red
+            Write-Host "      • This represents critical security and governance gaps" -ForegroundColor Red
+        }
     }
     
     # List high security impact policies
@@ -699,9 +1220,44 @@ if ($ShowRecommendations) {
         Write-Host "   - Policies protecting network security, encryption, and data access" -ForegroundColor DarkGray
         Write-Host "   - Defender for Cloud and backup/disaster recovery policies" -ForegroundColor DarkGray
     } else {
-        Write-Host "`n   ⚠️  No high security impact policies found!" -ForegroundColor Red
-        Write-Host "   Your environment lacks critical security controls." -ForegroundColor Red
-        Write-Host "   Consider implementing ALZ recommended policies from the gaps listed above." -ForegroundColor Yellow
+        Write-Host "`n   ❌ CRITICAL: No high security impact policies found!" -ForegroundColor Red
+        Write-Host "   Your environment lacks essential security controls." -ForegroundColor Red
+    }
+    
+    # Azure Landing Zone specific recommendations
+    if ($alzGapCount -gt 0) {
+        Write-Host "`n   🛡️  AZURE LANDING ZONE RECOMMENDATIONS:" -ForegroundColor Cyan
+        Write-Host "   Missing $alzGapCount ALZ recommended policies that provide:" -ForegroundColor White
+        
+        # Categorize ALZ gaps by security impact
+        $alzSecurityGaps = $missingCriticalPolicies | Where-Object { 
+            $_.PolicyPattern -match "Deny|Block|Prevent|Disable|Restrict" 
+        }
+        $alzComplianceGaps = $missingCriticalPolicies | Where-Object { 
+            $_.PolicyPattern -match "Audit|Monitor|Log|Enable" 
+        }
+        $alzRemediationGaps = $missingCriticalPolicies | Where-Object { 
+            $_.PolicyPattern -match "Deploy|Configure|Enforce" 
+        }
+        
+        if ($alzSecurityGaps.Count -gt 0) {
+            Write-Host "      • Security Controls ($($alzSecurityGaps.Count) missing): Network isolation, access control, encryption" -ForegroundColor Red
+        }
+        if ($alzRemediationGaps.Count -gt 0) {
+            Write-Host "      • Auto-Remediation ($($alzRemediationGaps.Count) missing): Automated configuration and compliance" -ForegroundColor Yellow
+        }
+        if ($alzComplianceGaps.Count -gt 0) {
+            Write-Host "      • Monitoring & Audit ($($alzComplianceGaps.Count) missing): Visibility and compliance tracking" -ForegroundColor Yellow
+        }
+        
+        Write-Host "`n   📖 RECOMMENDED ACTIONS:" -ForegroundColor Cyan
+        Write-Host "   1. Review the 'LANDING ZONE GAPS' section above for specific missing policies" -ForegroundColor White
+        Write-Host "   2. Prioritize implementing Deny/Block policies for immediate security hardening" -ForegroundColor White
+        Write-Host "   3. Deploy monitoring and audit policies for compliance visibility" -ForegroundColor White
+        Write-Host "   4. Implement DeployIfNotExists policies for automated remediation" -ForegroundColor White
+        Write-Host "   5. Reference Azure Landing Zone documentation: https://aka.ms/alz" -ForegroundColor White
+    } else {
+        Write-Host "`n   ✓ Azure Landing Zone coverage is complete" -ForegroundColor Green
     }
     
     # Best practices
@@ -712,6 +1268,61 @@ if ($ShowRecommendations) {
     Write-Host "   4. Monitor policy compliance in Azure Policy compliance dashboard"
     Write-Host "   5. Document exceptions using policy exemptions rather than disabling policies"
     Write-Host "   6. Review policies quarterly for relevance and effectiveness"
+    
+    # Compliance recommendations if frameworks were checked
+    if ($complianceResults.Count -gt 0) {
+        Write-Host "`n═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "  REGULATORY COMPLIANCE RECOMMENDATIONS" -ForegroundColor Cyan
+        Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        
+        $notAssigned = $complianceResults | Where-Object { $_.Status -eq 'Not Assigned' }
+        $lowCompliance = $complianceResults | Where-Object { 
+            $_.ComplianceScore -ne 'N/A' -and $_.ComplianceScore -ne 'null' -and 
+            [double]($_.ComplianceScore -replace '%', '') -lt 80 
+        }
+        
+        if ($notAssigned.Count -gt 0) {
+            Write-Host "`n🔴 CRITICAL - Missing Compliance Frameworks:" -ForegroundColor Red
+            foreach ($framework in $notAssigned) {
+                Write-Host "   • $($framework.Framework) - Not assigned to any scope" -ForegroundColor Yellow
+            }
+            Write-Host "`n   Action Required: Assign these frameworks to appropriate management groups/subscriptions" -ForegroundColor Red
+            Write-Host "   Use: Get-AzPolicySetDefinition | Where-Object { `$_.DisplayName -like '*PCI*' }" -ForegroundColor Gray
+        }
+        
+        if ($lowCompliance.Count -gt 0) {
+            Write-Host "`n🟡 WARNING - Low Compliance Scores:" -ForegroundColor Yellow
+            foreach ($framework in $lowCompliance) {
+                Write-Host "   • $($framework.Framework): $($framework.ComplianceScore) compliance" -ForegroundColor Yellow
+                Write-Host "     - $($framework.NonCompliantResources) non-compliant resources require remediation" -ForegroundColor Gray
+            }
+            Write-Host "`n   Action Required: Review non-compliant resources and create remediation tasks" -ForegroundColor Yellow
+            Write-Host "   Use: Get-AzPolicyState -Filter \"ComplianceState eq 'NonCompliant'\"" -ForegroundColor Gray
+        }
+        
+        $assigned = $complianceResults | Where-Object { 
+            $_.Status -notlike 'Not Assigned' -and $_.Status -notlike 'Error' 
+        }
+        if ($assigned.Count -gt 0) {
+            Write-Host "`n✓ ACTIVE COMPLIANCE FRAMEWORKS:" -ForegroundColor Green
+            foreach ($framework in $assigned) {
+                $scoreColor = 'White'
+                if ($framework.ComplianceScore -ne 'N/A') {
+                    $score = [double]($framework.ComplianceScore -replace '%', '')
+                    $scoreColor = if ($score -ge 90) { 'Green' } elseif ($score -ge 70) { 'Yellow' } else { 'Red' }
+                }
+                Write-Host "   • $($framework.Framework): " -NoNewline -ForegroundColor White
+                Write-Host "$($framework.ComplianceScore)" -ForegroundColor $scoreColor
+            }
+        }
+        
+        Write-Host "`n💡 COMPLIANCE TIPS:" -ForegroundColor Cyan
+        Write-Host "   • Enable Azure Policy compliance dashboard in Azure Portal" -ForegroundColor Gray
+        Write-Host "   • Set up alerts for compliance score drops" -ForegroundColor Gray
+        Write-Host "   • Create remediation tasks for DeployIfNotExists policies" -ForegroundColor Gray
+        Write-Host "   • Document policy exemptions with business justification" -ForegroundColor Gray
+        Write-Host "   • Schedule quarterly compliance reviews" -ForegroundColor Gray
+    }
 }
 
 # Export to CSV if requested
@@ -729,8 +1340,25 @@ if ($Export) {
         $csvPath = ".\PolicyAssignments_$timestamp.csv"
     }
     
-    $results | Export-Csv -Path $csvPath -NoTypeInformation
-    Write-Host "`nResults exported to: $csvPath" -ForegroundColor Green
+    Write-Host "`nExporting policy assignments to CSV..." -ForegroundColor Cyan
+    
+    # Export with progress bar
+    $totalItems = $results.Count
+    $currentItem = 0
+    $exportData = @()
+    
+    foreach ($item in $results) {
+        $currentItem++
+        $percentComplete = [math]::Round(($currentItem / $totalItems) * 100, 2)
+        Write-Progress -Activity "Exporting Policy Assignments" -Status "Processing item $currentItem of $totalItems" -PercentComplete $percentComplete
+        $exportData += $item
+    }
+    
+    Write-Progress -Activity "Exporting Policy Assignments" -Status "Writing to file..." -PercentComplete 99
+    $exportData | Export-Csv -Path $csvPath -NoTypeInformation
+    Write-Progress -Activity "Exporting Policy Assignments" -Completed
+    
+    Write-Host "Policy assignments exported to: $csvPath" -ForegroundColor Green
 } else {
     Write-Host "`nNo export requested. Use -Export switch to save results to CSV." -ForegroundColor Gray
 }

@@ -1,8 +1,12 @@
 # Azure Policy Assignments Assessment Script
 
+**Version 2.0.0** | [View Changelog](CHANGELOG.md)
+
 ## Overview
 
 This PowerShell script analyzes Azure Policy assignments across all management groups in an Azure tenant. It retrieves policy assignments directly assigned to each management group, excluding inherited policies from parent management groups, providing a clear view of the policy governance structure.
+
+**NEW in v2.0**: Enhanced with subscription and resource group enumeration, multi-tenant support, progress tracking, and accurate compliance data matching Azure Portal values!
 
 **IMPORTANT**: This script is specifically designed for and optimized for **Azure Landing Zone (ALZ) management group structures**. All recommendations and gap analysis are based on the standard ALZ architecture. The script will work with any management group hierarchy, but the policy recommendations are most meaningful when applied to an ALZ-compliant structure.
 
@@ -37,24 +41,41 @@ Tenant Root Group
 
 ## Features
 
+### Core Capabilities
 - **Multi-Tenant Support**: Select from multiple Azure tenants you have access to
 - **Management Group Discovery**: Automatically discovers all management groups in the selected tenant (including nested hierarchies)
 - **Direct Assignment Filtering**: Shows only policies directly assigned to each management group, excluding inherited policies
 - **Detailed Progress Tracking**: Displays real-time progress as it processes each management group
-- **Impact Analysis & Recommendations**: Optional recommendations on cost, security, compliance, and operational impact of policies
-- **Azure Landing Zone Validation**: Dynamically compares deployed policies against the official [Azure Landing Zones Library](https://github.com/Azure/Azure-Landing-Zones-Library) (version-controlled policy definitions)
-- **Comprehensive Output**: Shows policy assignment details including:
-  - Assignment Name
-  - Display Name
-  - Policy Type (Policy or Initiative)
-  - Effect Type (Deny, Audit, DINE, Modify, etc.)
-  - Enforcement Mode (Default or DoNotEnforce)
-  - Impact Analysis (Security, Cost, Compliance, Operational Overhead, Risk Level)
-  - Management Group Name and ID
-  - Policy Definition Name
-  - Scope
-  - Parameters
-- **CSV Export**: Automatically exports results to CSV for further analysis (with option to prompt instead)
+
+### Policy Assessment
+- **Azure Landing Zone Validation**: Dynamically compares deployed policies against the official [Azure Landing Zones Library](https://github.com/Azure/Azure-Landing-Zones-Library)
+- **Impact Analysis**: Security, Cost, Compliance, and Operational impact classification
+- **Gap Analysis**: Identifies missing policies based on ALZ recommendations
+- **Recommendations Engine**: Actionable insights for each policy assignment
+
+### Regulatory Compliance (NEW in v2.0)
+- **9 Major Frameworks**: PCI DSS, ISO 27001, NIST, CIS, SOC 2, HIPAA, FedRAMP, UK OFFICIAL, Microsoft Cloud Security Benchmark
+- **Compliance Scoring**: Real-time calculation of compliance percentages
+- **Resource-Level Details**: Identify specific non-compliant resources
+- **Framework Status**: Detection of assigned vs unassigned frameworks
+- **Remediation Guidance**: Actionable steps to improve compliance
+
+### Defender for Cloud Integration (NEW in v2.1)
+- **Secure Score**: Microsoft Defender for Cloud secure score reporting
+- **Control-Level Assessment**: Individual control pass/fail status (1.1, 1.2, etc.)
+- **Security Assessments**: Detailed security posture data from Defender for Cloud
+- **Microsoft Cloud Security Benchmark**: Azure Security Benchmark compliance
+- **Enhanced Details**: Control descriptions, severity levels, and remediation steps
+
+### Flexible Output Modes
+- **Policy Only**: Focus on ALZ policy assessment without compliance
+- **Compliance Only**: Quick compliance check without policy enumeration
+- **Combined**: Full assessment with both policy and compliance data
+
+### Export & Reporting
+- **CSV Export**: Separate exports for policy assignments and compliance data
+- **Custom Filenames**: User-defined or timestamped naming
+- **Comprehensive Details**: All metrics and recommendations included
 
 ## Prerequisites
 
@@ -62,24 +83,37 @@ Tenant Root Group
 
 - **Az.Accounts**: For Azure authentication and context management
 - **Az.Resources**: For policy assignment and management group queries
+- **Az.Security**: For Microsoft Defender for Cloud integration (Secure Score, assessments)
 
 ### Installation
 
 ```powershell
 Install-Module -Name Az.Accounts -Force -AllowClobber
 Install-Module -Name Az.Resources -Force -AllowClobber
+Install-Module -Name Az.Security -Force -AllowClobber
 ```
 
 ### Azure Permissions
 
 The account running the script needs:
 - **Reader** access or higher on management groups
+- **Security Reader** role for Microsoft Defender for Cloud features (optional but recommended)
 - **Reader** access on policy assignments
 - Typically requires at least **Management Group Reader** role at the tenant root level
 
 **Permission Errors**: If you encounter permission errors, the script will provide specific guidance on required roles. Contact your Azure administrator to grant appropriate access.
 
 ## Usage
+
+### Execution Modes
+
+The script supports multiple enumeration scopes:
+
+1. **Management Groups Only** (Default) - Assess policies at MG level
+2. **Include Subscriptions** - Use `-IncludeSubscriptions` to add subscription-level policies
+3. **Full Coverage** - Use `-IncludeSubscriptions -IncludeResourceGroups` for complete inventory
+
+See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
 
 ### Basic Execution
 
@@ -90,27 +124,27 @@ The account running the script needs:
 
 2. **Run the script**:
    ```powershell
-   # Basic execution (no export)
+   # Basic execution - Management Groups only
    .\Get-PolicyAssignments.ps1
    
-   # With recommendations and impact analysis
+   # With recommendations
    .\Get-PolicyAssignments.ps1 -ShowRecommendations
    
-   # Export to CSV with default timestamped filename
-   .\Get-PolicyAssignments.ps1 -Export
+   # Include subscription-level policies
+   .\Get-PolicyAssignments.ps1 -IncludeSubscriptions -Export
    
-   # Export to CSV with custom filename
-   .\Get-PolicyAssignments.ps1 -Export -FileName "MyPolicyReport.csv"
+   # Full coverage (MG + Subscriptions + Resource Groups)
+   .\Get-PolicyAssignments.ps1 -IncludeSubscriptions -IncludeResourceGroups -Export
    
-   # With all options
-   .\Get-PolicyAssignments.ps1 -ShowRecommendations -Export -FileName "PolicyAudit_$(Get-Date -Format 'yyyy-MM').csv"
+   # Complete assessment with recommendations
+   .\Get-PolicyAssignments.ps1 -IncludeSubscriptions -ShowRecommendations -Export
    ```
 
 3. **Select a tenant** when prompted (if you have access to multiple tenants)
 
 4. **Review the output** in the console
 
-5. **CSV export** (optional): Use the `-Export` switch to save results to a CSV file. Without this switch, no file is exported.
+5. **CSV export** (optional): Use the `-Export` switch to save results to CSV files.
 
 ### Parameters
 
