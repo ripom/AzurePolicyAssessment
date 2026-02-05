@@ -33,6 +33,10 @@
 .PARAMETER IncludeResourceGroups
     When specified, includes policy assignments from all resource groups. Requires -IncludeSubscriptions to be effective.
 
+.PARAMETER TenantId
+    Optional tenant ID to use for the assessment. When specified, skips the tenant selection prompt.
+    Useful for automation scenarios or when working with a specific tenant.
+
 .EXAMPLE
     .\Get-PolicyAssignments.ps1
     Lists all policy assignments across all management groups.
@@ -53,8 +57,16 @@
     .\Get-PolicyAssignments.ps1 -ShowRecommendations -Export -FileName "PolicyAudit_$(Get-Date -Format 'yyyy-MM').csv"
     Lists all policies with recommendations and exports to custom dated filename.
 
+.EXAMPLE
+    .\Get-PolicyAssignments.ps1 -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    Lists all policies in a specific tenant without prompting for tenant selection.
+
+.EXAMPLE
+    .\Get-PolicyAssignments.ps1 -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -IncludeSubscriptions -Export
+    Automated assessment of a specific tenant including subscriptions with CSV export.
+
 .NOTES
-    Version: 2.0.0
+    Version: 2.0.1
     Last Updated: February 5, 2026
     Author: Azure Policy Assessment Tool
     
@@ -63,6 +75,11 @@
     For compliance data, policies must be assigned and evaluated (may take time for new assignments)
     
     Version History:
+    - 2.0.1 (2026-02-05): Enhanced summary statistics with detailed breakdowns:
+                          - Policy type counts (Initiatives vs Single Policies)
+                          - Assignments by scope (MG, Subscriptions, RG)
+                          - Effect types distribution
+                          - Enforcement mode statistics
     - 2.0.0 (2026-02-05): Enhanced with subscription/RG enumeration, multi-tenant support,
                           accurate compliance data using PolicyAssignmentName filter,
                           progress bars, and improved ALZ recommendations
@@ -86,11 +103,14 @@ param(
     [switch]$IncludeSubscriptions,
     
     [Parameter(Mandatory=$false)]
-    [switch]$IncludeResourceGroups
+    [switch]$IncludeResourceGroups,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$TenantId
 )
 
 # Script Version
-$ScriptVersion = "2.0.0"
+$ScriptVersion = "2.0.1"
 $ScriptLastUpdated = "2026-02-05"
 
 # Display version banner
@@ -123,29 +143,50 @@ if ($tenants.Count -eq 0) {
     exit
 }
 
-# Display tenants for selection
-Write-Host "`nAvailable Tenants:" -ForegroundColor Cyan
-for ($i = 0; $i -lt $tenants.Count; $i++) {
-    $tenant = $tenants[$i]
-    Write-Host "  [$($i + 1)] $($tenant.Name) (ID: $($tenant.Id))" -ForegroundColor White
-}
-
-# Prompt user to select a tenant
-Write-Host ""
-$selection = Read-Host "Select a tenant by number (1-$($tenants.Count))"
-
-# Validate selection
-if ($selection -match '^\d+$' -and [int]$selection -ge 1 -and [int]$selection -le $tenants.Count) {
-    $selectedTenant = $tenants[[int]$selection - 1]
-    Write-Host "Selected tenant: $($selectedTenant.Name) (ID: $($selectedTenant.Id))" -ForegroundColor Green
+# Tenant selection logic
+if ($TenantId) {
+    # TenantId parameter provided - validate and use it
+    $selectedTenant = $tenants | Where-Object { $_.Id -eq $TenantId }
     
-    # Set the context to the selected tenant
-    Write-Host "Switching to selected tenant..." -ForegroundColor Cyan
-    Set-AzContext -TenantId $selectedTenant.Id | Out-Null
-    Write-Host "Context switched successfully!" -ForegroundColor Green
+    if ($selectedTenant) {
+        Write-Host "Using specified tenant: $($selectedTenant.Name) (ID: $($selectedTenant.Id))" -ForegroundColor Green
+        
+        # Set the context to the specified tenant
+        Write-Host "Switching to specified tenant..." -ForegroundColor Cyan
+        Set-AzContext -TenantId $selectedTenant.Id | Out-Null
+        Write-Host "Context switched successfully!" -ForegroundColor Green
+    } else {
+        Write-Host "Error: Tenant ID '$TenantId' not found or not accessible." -ForegroundColor Red
+        Write-Host "Available tenants:" -ForegroundColor Yellow
+        $tenants | ForEach-Object { Write-Host "  - $($_.Name) (ID: $($_.Id))" -ForegroundColor White }
+        exit
+    }
 } else {
-    Write-Host "Invalid selection. Please run the script again and select a valid number." -ForegroundColor Red
-    exit
+    # No TenantId parameter - prompt for selection
+    # Display tenants for selection
+    Write-Host "`nAvailable Tenants:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $tenants.Count; $i++) {
+        $tenant = $tenants[$i]
+        Write-Host "  [$($i + 1)] $($tenant.Name) (ID: $($tenant.Id))" -ForegroundColor White
+    }
+
+    # Prompt user to select a tenant
+    Write-Host ""
+    $selection = Read-Host "Select a tenant by number (1-$($tenants.Count))"
+
+    # Validate selection
+    if ($selection -match '^\d+$' -and [int]$selection -ge 1 -and [int]$selection -le $tenants.Count) {
+        $selectedTenant = $tenants[[int]$selection - 1]
+        Write-Host "Selected tenant: $($selectedTenant.Name) (ID: $($selectedTenant.Id))" -ForegroundColor Green
+        
+        # Set the context to the selected tenant
+        Write-Host "Switching to selected tenant..." -ForegroundColor Cyan
+        Set-AzContext -TenantId $selectedTenant.Id | Out-Null
+        Write-Host "Context switched successfully!" -ForegroundColor Green
+    } else {
+        Write-Host "Invalid selection. Please run the script again and select a valid number." -ForegroundColor Red
+        exit
+    }
 }
 
 #region Function Definitions
@@ -1064,17 +1105,54 @@ if ($ShowRecommendations) {
     
     # Summary statistics
     $totalPolicies = $results.Count
+    $totalInitiatives = ($results | Where-Object { $_.'Policy Type' -eq 'Initiative' }).Count
+    $totalSinglePolicies = ($results | Where-Object { $_.'Policy Type' -eq 'Policy' }).Count
     $highSecurityPolicies = ($results | Where-Object { $_.'Security Impact' -eq 'High' }).Count
     $highCostPolicies = ($results | Where-Object { $_.'Cost Impact' -eq 'High' }).Count
     $doNotEnforcePolicies = ($results | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' }).Count
+    $defaultEnforcePolicies = ($results | Where-Object { $_.'Enforcement Mode' -eq 'Default' }).Count
     $highRiskPolicies = ($results | Where-Object { $_.'Risk Level' -eq 'High' }).Count
     
+    # Count by scope type
+    $mgAssignments = ($results | Where-Object { $_.'Scope Type' -eq 'Management Group' }).Count
+    $subAssignments = ($results | Where-Object { $_.'Scope Type' -eq 'Subscription' }).Count
+    $rgAssignments = ($results | Where-Object { $_.'Scope Type' -eq 'Resource Group' }).Count
+    
+    # Count effect types
+    $effectTypeCounts = $results | Group-Object 'Effect Type' | Sort-Object Count -Descending
+    
     Write-Host "`nSummary Statistics:" -ForegroundColor Yellow
-    Write-Host "  Total Policy Assignments: $totalPolicies"
-    Write-Host "  High Security Impact: $highSecurityPolicies"
-    Write-Host "  High Cost Impact: $highCostPolicies"
-    Write-Host "  DoNotEnforce Mode: $doNotEnforcePolicies"
-    Write-Host "  High Risk Level: $highRiskPolicies"
+    Write-Host "  Total Policy Assignments: $totalPolicies" -ForegroundColor White
+    Write-Host "    • Initiatives (Policy Sets): $totalInitiatives" -ForegroundColor Gray
+    Write-Host "    • Single Policies: $totalSinglePolicies" -ForegroundColor Gray
+    
+    Write-Host "`n  Assignments by Scope:" -ForegroundColor White
+    Write-Host "    • Management Groups: $mgAssignments" -ForegroundColor Gray
+    if ($subAssignments -gt 0) {
+        Write-Host "    • Subscriptions: $subAssignments" -ForegroundColor Gray
+    }
+    if ($rgAssignments -gt 0) {
+        Write-Host "    • Resource Groups: $rgAssignments" -ForegroundColor Gray
+    }
+    
+    Write-Host "`n  Enforcement Mode:" -ForegroundColor White
+    Write-Host "    • Default (Enforced): $defaultEnforcePolicies" -ForegroundColor Gray
+    Write-Host "    • DoNotEnforce: $doNotEnforcePolicies" -ForegroundColor Gray
+    
+    Write-Host "`n  Effect Types:" -ForegroundColor White
+    foreach ($effect in $effectTypeCounts) {
+        $effectName = if ([string]::IsNullOrWhiteSpace($effect.Name) -or $effect.Name -eq '(not specified)') { 
+            '(not specified)' 
+        } else { 
+            $effect.Name 
+        }
+        Write-Host "    • $($effectName): $($effect.Count)" -ForegroundColor Gray
+    }
+    
+    Write-Host "`n  Impact Analysis:" -ForegroundColor White
+    Write-Host "    • High Security Impact: $highSecurityPolicies" -ForegroundColor Gray
+    Write-Host "    • High Cost Impact: $highCostPolicies" -ForegroundColor Gray
+    Write-Host "    • High Risk Level: $highRiskPolicies" -ForegroundColor Gray
     
     # Get recommended Azure Landing Zone policies (dynamically from GitHub or fallback)
     $recommendedALZPolicies = Get-ALZRecommendedPolicies -ALZVersion "main"

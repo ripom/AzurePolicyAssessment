@@ -1,6 +1,6 @@
 # Output Options - Quick Reference
 
-**Version 2.0.0** | [View Changelog](CHANGELOG.md)
+**Version 2.0.1** | [View Changelog](CHANGELOG.md)
 
 ## Scope Options
 

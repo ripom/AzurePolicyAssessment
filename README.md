@@ -1,6 +1,6 @@
 # Azure Policy Assignments Assessment Script
 
-**Version 2.0.0** | [View Changelog](CHANGELOG.md)
+**Version 2.0.1** | [View Changelog](CHANGELOG.md)
 
 ## Overview
 
@@ -130,6 +130,9 @@ See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
    # With recommendations
    .\Get-PolicyAssignments.ps1 -ShowRecommendations
    
+   # Specify tenant ID (skip tenant selection prompt)
+   .\Get-PolicyAssignments.ps1 -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+   
    # Include subscription-level policies
    .\Get-PolicyAssignments.ps1 -IncludeSubscriptions -Export
    
@@ -138,9 +141,12 @@ See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
    
    # Complete assessment with recommendations
    .\Get-PolicyAssignments.ps1 -IncludeSubscriptions -ShowRecommendations -Export
+   
+   # Automated run for specific tenant
+   .\Get-PolicyAssignments.ps1 -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -IncludeSubscriptions -Export
    ```
 
-3. **Select a tenant** when prompted (if you have access to multiple tenants)
+3. **Select a tenant** when prompted (if you have access to multiple tenants and didn't specify -TenantId)
 
 4. **Review the output** in the console
 
@@ -165,6 +171,12 @@ See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
 - **`-Export`**: When specified, exports results to a CSV file. Without this switch, no file is exported.
 
 - **`-FileName`**: Custom filename for CSV export (e.g., "MyReport.csv"). If not provided, uses default timestamped format `PolicyAssignments_YYYYMMDD_HHMMSS.csv`. Only used when `-Export` is specified.
+
+- **`-IncludeSubscriptions`**: When specified, includes policy assignments from all subscriptions in addition to management groups.
+
+- **`-IncludeResourceGroups`**: When specified, includes policy assignments from all resource groups. Requires `-IncludeSubscriptions` to be effective.
+
+- **`-TenantId`**: Optional tenant ID to use for the assessment. When specified, skips the tenant selection prompt. Useful for automation scenarios or when working with a specific tenant. Example: `-TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"`
 
 ### Example Output
 

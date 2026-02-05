@@ -5,6 +5,28 @@ All notable changes to the Azure Policy & Compliance Assessment Tool will be doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-02-05
+
+### Added
+- **TenantId Parameter**: Optional `-TenantId` parameter to skip tenant selection prompt
+  - Enables automation scenarios
+  - Validates tenant ID and provides helpful error messages
+  - Useful for CI/CD pipelines and scheduled assessments
+
+### Enhanced
+- **Summary Statistics**: Comprehensive breakdown of policy assignments
+  - Policy type distribution (Initiatives vs Single Policies)
+  - Assignments by scope (Management Groups, Subscriptions, Resource Groups)
+  - Effect types distribution (Deny, Audit, DeployIfNotExists, Modify, etc.)
+  - Enforcement mode statistics (Default vs DoNotEnforce)
+  - Reorganized impact analysis for better readability
+
+### Changed
+- Enhanced recommendations output with detailed statistics
+- Improved summary statistics formatting and organization
+- Added conditional display for subscription and RG counts (only shown when enumerated)
+- Improved tenant selection experience with clearer error messages
+
 ## [2.0.0] - 2026-02-05
 
 ### Added
