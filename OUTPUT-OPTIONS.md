@@ -1,10 +1,17 @@
 # Output Options - Quick Reference
 
-**Version 2.1.0** | [View Changelog](CHANGELOG.md)
+**Version 2.2.0** | [View Changelog](CHANGELOG.md)
 
-## 🚀 NEW in v2.1: Lightning-Fast Performance
+## 🎯 NEW in v2.2: Cyber Essentials Plus Compliance
 
-The script now uses Azure Resource Graph for 10-50x faster execution!
+Experimental feature mapping CE+ requirements to Azure policies!
+- `-ExportCEPCompliance` parameter for CSV export
+- Gap analysis and compliance scoring
+- See [CYBER-ESSENTIALS-PLUS.md](CYBER-ESSENTIALS-PLUS.md) for details
+
+## 🚀 v2.1: Lightning-Fast Performance
+
+The script uses Azure Resource Graph for 10-50x faster execution!
 - Queries complete in seconds instead of minutes
 - No subscription context switching required
 - All features preserved
@@ -130,11 +137,11 @@ $month = Get-Date -Format "yyyy-MM"
 
 | Scope | Execution Time* | Resource Count | Best For |
 |-------|----------------|----------------|----------|
-| MG Only | 1-2 minutes | ~40-60 policies | Regular reviews |
-| + Subscriptions | 2-4 minutes | +10-20 per sub | Subscription audits |
-| + Resource Groups | 5-10 minutes | +varies by RGs | Complete inventory |
+| MG Only | 5-10 seconds | ~40-60 policies | Regular reviews |
+| + Subscriptions | 10-20 seconds | +10-20 per sub | Subscription audits |
+| + Resource Groups | 20-40 seconds | +varies by RGs | Complete inventory |
 
-*Times vary based on environment size and number of subscriptions
+*Times vary based on environment size. Azure Resource Graph (ARG) provides 10-50x faster execution than traditional API enumeration.
 
 ## CSV Export Structure
 
@@ -165,7 +172,7 @@ $month = Get-Date -Format "yyyy-MM"
 
 ## Progress Tracking
 
-Version 2.0.0 includes real-time progress bars:
+The script includes real-time progress bars:
 
 ```
 Processing Policy Assignments
@@ -180,7 +187,7 @@ Exporting Policy Assignments
 
 ## Multi-Tenant Support
 
-Version 2.0.0 enforces tenant boundaries:
+The script enforces tenant boundaries:
 
 ```
 Current Tenant ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx

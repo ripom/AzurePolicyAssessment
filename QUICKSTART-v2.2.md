@@ -1,7 +1,11 @@
-# Quick Start Guide - v2.1.0
+# Quick Start Guide - v2.2.0
 
-## 🚀 What's New?
+> ⚠️ **DISCLAIMER**: This is NOT an official Microsoft tool. Provided as-is with no warranties.  
+> Results may not be 100% accurate. Support is best-effort only. Use at your own risk.
+
+## 🎯 What's New?
 **10-50x faster execution** using Azure Resource Graph!
+**NEW**: Cyber Essentials Plus compliance mapping!
 
 ## ⚡ One-Time Setup
 
@@ -18,6 +22,9 @@ Install-Module -Name Az.ResourceGraph -Force -AllowClobber
 
 # With recommendations
 .\Get-PolicyAssignments.ps1 -ShowRecommendations
+
+# With CE+ compliance (NEW in v2.2!)
+.\Get-PolicyAssignments.ps1 -ShowRecommendations -ExportCEPCompliance
 
 # Export to CSV
 .\Get-PolicyAssignments.ps1 -Export

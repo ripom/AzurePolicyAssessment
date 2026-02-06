@@ -66,12 +66,8 @@
     .\Get-PolicyAssignments.ps1 -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -IncludeSubscriptions -Export
     Automated assessment of a specific tenant including subscriptions with CSV export.
 
-.EXAMPLE
-    .\Get-PolicyAssignments.ps1 -ShowRecommendations -ExportCEPCompliance
-    Lists policies with recommendations and exports Cyber Essentials Plus compliance report to CSV.
-
 .NOTES
-    Version: 2.2.0
+    Version: 2.1.0
     Last Updated: February 5, 2026
     Author: Azure Policy Assessment Tool
     
@@ -110,67 +106,19 @@ param(
     [switch]$IncludeResourceGroups,
     
     [Parameter(Mandatory=$false)]
-    [string]$TenantId,
-    
-    [Parameter(Mandatory=$false)]
-    [switch]$ExportCEPCompliance
+    [string]$TenantId
 )
 
 # Script Version
-$ScriptVersion = "2.2.0"
-$ScriptLastUpdated = "2026-02-06"
-
-# Cyber Essentials Plus Mapping to Azure Policies
-# Based on: https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus?utm_source=copilot.com
-$CyberEssentialsPlusMapping = @{
-    'Patch Management' = @(
-        'System updates should be installed on your machines',
-        'Missing system updates should be remediated',
-        'Machines should be configured to automatically install updates',
-        'Update Manager should be enabled for all VMs'
-    )
-    'Firewalls & Internet Boundary' = @(
-        'Network Security Groups should be applied to all subnets',
-        'Network Security Groups should be applied to all NICs',
-        'Public network access should be disabled for PaaS services',
-        'Just-In-Time network access should be enabled on VMs',
-        'Azure Firewall should be deployed'
-    )
-    'Secure Configuration' = @(
-        'Windows machines should meet security baseline',
-        'Linux machines should meet security baseline',
-        'TLS version should be set to 1.2 or higher',
-        'Secure transfer to storage accounts should be enabled',
-        'App Service apps should only be accessible over HTTPS',
-        'Enforce encryption in transit for PaaS services'
-    )
-    'Malware Protection' = @(
-        'Endpoint protection should be installed on all VMs',
-        'Microsoft Defender for Endpoint should be enabled',
-        'Azure Defender for Servers (Plan 1 or 2) should be enabled',
-        'Vulnerability assessment should be enabled on machines'
-    )
-    'Access Control' = @(
-        'MFA should be enabled for all Azure AD users',
-        'MFA should be enabled for accounts with write permissions',
-        'Privileged Identity Management should be enabled',
-        'Role assignments should not use wildcard permissions',
-        'Legacy authentication protocols should be blocked'
-    )
-}
+$ScriptVersion = "2.1.0"
+$ScriptLastUpdated = "2026-02-05"
 
 # Display version banner
-Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ" -ForegroundColor Cyan
 Write-Host "  Azure Policy & Compliance Assessment Tool" -ForegroundColor Cyan
 Write-Host "  Version: $ScriptVersion | Last Updated: $ScriptLastUpdated" -ForegroundColor Cyan
 Write-Host "  Performance: Azure Resource Graph Integration" -ForegroundColor Green
-Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "⚠️  DISCLAIMER:" -ForegroundColor Yellow
-Write-Host "   This is NOT an official Microsoft tool. Support is provided on a best-effort basis." -ForegroundColor Gray
-Write-Host "   Results may not be 100% accurate. Always verify against Azure Portal and official tools." -ForegroundColor Gray
-Write-Host "   Use at your own risk. No warranties or guarantees provided." -ForegroundColor Gray
-Write-Host ""
+Write-Host "ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ" -ForegroundColor Cyan
 
 # Requires Azure PowerShell modules
 # Install-Module -Name Az.Accounts -Force -AllowClobber
@@ -473,7 +421,7 @@ function Get-PolicyRecommendation {
 
 #endregion Function Definitions
 
-Write-Host "`nInitializing Azure Resource Graph queries..." -ForegroundColor Cyan
+Write-Host "`nInitializing Azure Resource Graph queries...\" -ForegroundColor Cyan
 
 # Get current tenant context to enforce tenant boundary
 $currentContext = Get-AzContext
@@ -496,7 +444,7 @@ try {
         exit
     }
     Import-Module Az.ResourceGraph -ErrorAction Stop
-    Write-Host "✓ Az.ResourceGraph module loaded successfully (Version: $($argModule.Version))" -ForegroundColor Green
+    Write-Host "Ô£ô Az.ResourceGraph module loaded successfully (Version: $($argModule.Version))" -ForegroundColor Green
 } catch {
     Write-Host "ERROR: Failed to load Az.ResourceGraph module: $($_.Exception.Message)" -ForegroundColor Red
     exit
@@ -581,7 +529,7 @@ try {
     
     Write-Progress -Activity "Querying Azure Resource Graph" -Status "Completed" -PercentComplete 100 -Id 10
     Write-Progress -Activity "Querying Azure Resource Graph" -Completed -Id 10
-    Write-Host "  ✓ Found $($argResults.Count) policy assignments" -ForegroundColor Green
+    Write-Host "  Ô£ô Found $($argResults.Count) policy assignments" -ForegroundColor Green
     Write-Host "" # Blank line
 } catch {
     Write-Host "ERROR: Failed to query Azure Resource Graph" -ForegroundColor Red
@@ -598,11 +546,11 @@ Write-Host "Querying compliance data from Azure Resource Graph..." -ForegroundCo
 $complianceQuery = @"
 policyresources
 | where type == 'microsoft.policyinsights/policystates'
+| where properties.complianceState == 'NonCompliant'
 | extend policyAssignmentId = tolower(tostring(properties.policyAssignmentId))
 | summarize 
-    TotalResources = dcount(tostring(properties.resourceId)),
-    NonCompliantResources = dcountif(tostring(properties.resourceId), properties.complianceState == 'NonCompliant'),
-    NonCompliantPolicyDefs = dcountif(tostring(properties.policyDefinitionId), properties.complianceState == 'NonCompliant')
+    NonCompliantResources = dcount(tostring(properties.resourceId)),
+    NonCompliantPolicyDefs = dcount(tostring(properties.policyDefinitionId))
     by policyAssignmentId
 "@
 
@@ -637,11 +585,10 @@ try {
             $complianceData[$item.policyAssignmentId] = @{
                 NonCompliantResources = $item.NonCompliantResources
                 NonCompliantPolicyDefs = $item.NonCompliantPolicyDefs
-                TotalResources = $item.TotalResources
             }
         }
         Write-Progress -Activity "Querying Compliance Data" -Completed -Id 11
-        Write-Host "  ✓ Retrieved compliance data for $($complianceData.Count) assignments" -ForegroundColor Green
+        Write-Host "  Ô£ô Retrieved compliance data for $($complianceData.Count) assignments" -ForegroundColor Green
     } else {
         Write-Progress -Activity "Querying Compliance Data" -Completed -Id 11
         Write-Host "  No non-compliant resources found (all policies are compliant)" -ForegroundColor Green
@@ -690,7 +637,7 @@ try {
         }
     }
     Write-Progress -Activity "Loading Management Groups" -Completed -Id 12
-    Write-Host "  ✓ Loaded $($mgLookup.Count) management group names" -ForegroundColor Green
+    Write-Host "  Ô£ô Loaded $($mgLookup.Count) management group names" -ForegroundColor Green
 } catch {
     Write-Progress -Activity "Loading Management Groups" -Completed -Id 12
     Write-Host "  Warning: Could not retrieve management group names" -ForegroundColor Yellow
@@ -703,8 +650,6 @@ Write-Progress -Activity "Processing Policy Assignments" -Status "Starting proce
 # Process each assignment from ARG results
 $processedCount = 0
 $totalAssignments = $argResults.Count
-
-$cyberEssentialsFound = $false
 
 foreach ($assignment in $argResults) {
     $processedCount++
@@ -783,12 +728,10 @@ foreach ($assignment in $argResults) {
     $assignmentIdLower = $assignment.assignmentId.ToLower()
     $nonCompliantResources = 0
     $nonCompliantPolicies = 0
-    $totalResources = 0
     
     if ($complianceData.ContainsKey($assignmentIdLower)) {
         $nonCompliantResources = $complianceData[$assignmentIdLower].NonCompliantResources
         $nonCompliantPolicies = $complianceData[$assignmentIdLower].NonCompliantPolicyDefs
-        $totalResources = if ($complianceData[$assignmentIdLower].TotalResources) { $complianceData[$assignmentIdLower].TotalResources } else { 0 }
     }
     
     # For single policies, non-compliant policies is 0 or 1
@@ -796,17 +739,6 @@ foreach ($assignment in $argResults) {
         $nonCompliantPolicies = 1
     }
     
-    # Track policies that map to Cyber Essentials Plus requirements
-    foreach ($ceCategory in $CyberEssentialsPlusMapping.Keys) {
-        foreach ($cePolicy in $CyberEssentialsPlusMapping[$ceCategory]) {
-            if ($policyDefName -like "*$cePolicy*" -or $assignment.assignmentName -like "*$cePolicy*" -or $assignment.displayName -like "*$cePolicy*") {
-                $cyberEssentialsFound = $true
-                break
-            }
-        }
-        if ($cyberEssentialsFound) { break }
-    }
-
     # Create result object
     $policyResult = [PSCustomObject]@{
         'Assignment Name'     = $assignment.assignmentName
@@ -864,21 +796,21 @@ if ($ShowRecommendations) {
     
     Write-Host "`nSummary Statistics:" -ForegroundColor Yellow
     Write-Host "  Total Policy Assignments: $totalPolicies" -ForegroundColor White
-    Write-Host "    • Initiatives (Policy Sets): $totalInitiatives" -ForegroundColor Gray
-    Write-Host "    • Single Policies: $totalSinglePolicies" -ForegroundColor Gray
+    Write-Host "    ÔÇó Initiatives (Policy Sets): $totalInitiatives" -ForegroundColor Gray
+    Write-Host "    ÔÇó Single Policies: $totalSinglePolicies" -ForegroundColor Gray
     
     Write-Host "`n  Assignments by Scope:" -ForegroundColor White
-    Write-Host "    • Management Groups: $mgAssignments" -ForegroundColor Gray
+    Write-Host "    ÔÇó Management Groups: $mgAssignments" -ForegroundColor Gray
     if ($subAssignments -gt 0) {
-        Write-Host "    • Subscriptions: $subAssignments" -ForegroundColor Gray
+        Write-Host "    ÔÇó Subscriptions: $subAssignments" -ForegroundColor Gray
     }
     if ($rgAssignments -gt 0) {
-        Write-Host "    • Resource Groups: $rgAssignments" -ForegroundColor Gray
+        Write-Host "    ÔÇó Resource Groups: $rgAssignments" -ForegroundColor Gray
     }
     
     Write-Host "`n  Enforcement Mode:" -ForegroundColor White
-    Write-Host "    • Default (Enforced): $defaultEnforcePolicies" -ForegroundColor Gray
-    Write-Host "    • DoNotEnforce: $doNotEnforcePolicies" -ForegroundColor Gray
+    Write-Host "    ÔÇó Default (Enforced): $defaultEnforcePolicies" -ForegroundColor Gray
+    Write-Host "    ÔÇó DoNotEnforce: $doNotEnforcePolicies" -ForegroundColor Gray
     
     Write-Host "`n  Effect Types:" -ForegroundColor White
     foreach ($effect in $effectTypeCounts) {
@@ -887,13 +819,13 @@ if ($ShowRecommendations) {
         } else { 
             $effect.Name 
         }
-        Write-Host "    • $($effectName): $($effect.Count)" -ForegroundColor Gray
+        Write-Host "    ÔÇó $($effectName): $($effect.Count)" -ForegroundColor Gray
     }
     
     Write-Host "`n  Impact Analysis:" -ForegroundColor White
-    Write-Host "    • High Security Impact: $highSecurityPolicies" -ForegroundColor Gray
-    Write-Host "    • High Cost Impact: $highCostPolicies" -ForegroundColor Gray
-    Write-Host "    • High Risk Level: $highRiskPolicies" -ForegroundColor Gray
+    Write-Host "    ÔÇó High Security Impact: $highSecurityPolicies" -ForegroundColor Gray
+    Write-Host "    ÔÇó High Cost Impact: $highCostPolicies" -ForegroundColor Gray
+    Write-Host "    ÔÇó High Risk Level: $highRiskPolicies" -ForegroundColor Gray
     
     # Get recommended Azure Landing Zone policies (dynamically from GitHub or fallback)
     $recommendedALZPolicies = Get-ALZRecommendedPolicies -ALZVersion "main"
@@ -908,7 +840,7 @@ if ($ShowRecommendations) {
     foreach ($category in $recommendedALZPolicies.Keys) {
         if ($recommendedALZPolicies[$category].Count -eq 0) { continue }
         
-        Write-Host "`n  $category" -ForegroundColor Cyan
+        Write-Host "`n  $category\" -ForegroundColor Cyan
         foreach ($policy in $recommendedALZPolicies[$category]) {
             # Case-insensitive exact matching against Assignment Name, Policy Name, and Display Name
             $matchingPolicies = $assignedPoliciesWithEnforcement | Where-Object { 
@@ -921,17 +853,17 @@ if ($ShowRecommendations) {
                 # Check if any matching policy is in DoNotEnforce mode
                 $doNotEnforceMatch = $matchingPolicies | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' }
                 if ($doNotEnforceMatch) {
-                    Write-Host "    ⚠️  $policy (DoNotEnforce)" -ForegroundColor Yellow
+                    Write-Host "    ÔÜá´©Å  $policy (DoNotEnforce)\" -ForegroundColor Yellow
                     $doNotEnforceALZPolicies += [PSCustomObject]@{
                         Category = $category
                         PolicyName = $policy
                         ActualName = $doNotEnforceMatch[0].'Policy Name'
                     }
                 } else {
-                    Write-Host "    ✓ $policy" -ForegroundColor Green
+                    Write-Host "    Ô£ô $policy\" -ForegroundColor Green
                 }
             } else {
-                Write-Host "    ✗ $policy (MISSING)" -ForegroundColor Red
+                Write-Host "    Ô£ù $policy (MISSING)\" -ForegroundColor Red
                 $missingCriticalPolicies += [PSCustomObject]@{
                     Category = $category
                     PolicyPattern = $policy
@@ -944,24 +876,24 @@ if ($ShowRecommendations) {
     Write-Host "`nKEY RECOMMENDATIONS:" -ForegroundColor Yellow
     
     if ($highRiskPolicies -gt 0) {
-        Write-Host "`n⚠️  HIGH PRIORITY:" -ForegroundColor Red
+        Write-Host "`nÔÜá´©Å  HIGH PRIORITY:" -ForegroundColor Red
         Write-Host "   $highRiskPolicies policies are marked as high risk (disabled or critical misconfigurations)."
         Write-Host "   Review and remediate immediately." -ForegroundColor Red
     }
     
     if ($doNotEnforcePolicies -gt 0) {
-        Write-Host "`n⚠️  ENFORCEMENT:" -ForegroundColor Yellow
+        Write-Host "`nÔÜá´©Å  ENFORCEMENT:" -ForegroundColor Yellow
         Write-Host "   $doNotEnforcePolicies policies are in DoNotEnforce mode."
         Write-Host "   These are not actively protecting your environment. Consider enabling enforcement." -ForegroundColor Yellow
         
         # Show ALZ-recommended policies in DoNotEnforce mode
         if ($doNotEnforceALZPolicies.Count -gt 0) {
-            Write-Host "`n   ⚠️  ALZ-Recommended Policies in DoNotEnforce Mode:" -ForegroundColor Yellow
+            Write-Host "`n   ÔÜá´©Å  ALZ-Recommended Policies in DoNotEnforce Mode:" -ForegroundColor Yellow
             $doNotEnforceByCategory = $doNotEnforceALZPolicies | Group-Object Category
             foreach ($group in $doNotEnforceByCategory) {
                 Write-Host "`n      $($group.Name):" -ForegroundColor White
                 foreach ($item in $group.Group) {
-                    Write-Host "        • $($item.ActualName) - DoNotEnforce" -ForegroundColor Gray
+                    Write-Host "        ÔÇó $($item.ActualName) - DoNotEnforce" -ForegroundColor Gray
                 }
             }
             Write-Host "`n      These are recommended by Azure Landing Zones but not actively enforced." -ForegroundColor DarkYellow
@@ -969,14 +901,14 @@ if ($ShowRecommendations) {
     }
     
     if ($highCostPolicies -gt 0) {
-        Write-Host "`n💰 COST OPTIMIZATION:" -ForegroundColor Cyan
+        Write-Host "`n­ƒÆ░ COST OPTIMIZATION:" -ForegroundColor Cyan
         Write-Host "   $highCostPolicies policies have high cost impact."
         
         # List high cost impact policies
         Write-Host "`n   High Cost Impact Policies:" -ForegroundColor White
         $results | Where-Object { $_.'Cost Impact' -eq 'High' } | ForEach-Object {
             $effectInfo = if ($_.'Effect Type' -ne '(not specified)') { "[$($_.'Effect Type')]" } else { "" }
-            Write-Host "     • $($_.'Policy Name') $effectInfo" -ForegroundColor Gray
+            Write-Host "     ÔÇó $($_.'Policy Name') $effectInfo" -ForegroundColor Gray
         }
         
         Write-Host "`n   Review these for budget planning. Consider:" -ForegroundColor Cyan
@@ -986,7 +918,7 @@ if ($ShowRecommendations) {
     }
     
     if ($missingCriticalPolicies.Count -gt 0) {
-        Write-Host "`n🛡️  LANDING ZONE GAPS:" -ForegroundColor Magenta
+        Write-Host "`n­ƒøí´©Å  LANDING ZONE GAPS:" -ForegroundColor Magenta
         Write-Host "   $($missingCriticalPolicies.Count) recommended Azure Landing Zone policies are missing."
         Write-Host "   Consider implementing the following by category:" -ForegroundColor Magenta
         
@@ -994,33 +926,33 @@ if ($ShowRecommendations) {
         foreach ($group in $missingByCategory) {
             Write-Host "`n   $($group.Name):" -ForegroundColor White
             foreach ($item in $group.Group) {
-                Write-Host "     • $($item.PolicyPattern)" -ForegroundColor Gray
+                Write-Host "     ÔÇó $($item.PolicyPattern)" -ForegroundColor Gray
             }
         }
     } else {
-        Write-Host "`n✓ LANDING ZONE COVERAGE:" -ForegroundColor Green
+        Write-Host "`nÔ£ô LANDING ZONE COVERAGE:" -ForegroundColor Green
         Write-Host "   Good coverage of recommended Azure Landing Zone policies." -ForegroundColor Green
     }
     
     # Security posture assessment
-    Write-Host "`n🔒 SECURITY POSTURE:" -ForegroundColor Yellow
+    Write-Host "`n­ƒöÆ SECURITY POSTURE:" -ForegroundColor Yellow
     
     # Combine security assessment with ALZ gap analysis
     $alzGapCount = $missingCriticalPolicies.Count
     
     if ($highSecurityPolicies -gt 10 -and $alzGapCount -eq 0) {
-        Write-Host "   ✓ Strong - $highSecurityPolicies high-impact security policies in place with good ALZ coverage." -ForegroundColor Green
+        Write-Host "   Ô£ô Strong - $highSecurityPolicies high-impact security policies in place with good ALZ coverage." -ForegroundColor Green
     } elseif ($highSecurityPolicies -gt 5 -and $alzGapCount -lt 10) {
         Write-Host "   Moderate - $highSecurityPolicies high-impact security policies deployed." -ForegroundColor Yellow
         if ($alzGapCount -gt 0) {
             Write-Host "   However, $alzGapCount Azure Landing Zone recommended policies are missing." -ForegroundColor Yellow
         }
     } else {
-        Write-Host "   ⚠️  Weak - Security posture requires immediate attention." -ForegroundColor Red
-        Write-Host "      • Only $highSecurityPolicies high-impact security policies deployed" -ForegroundColor Red
+        Write-Host "   ÔÜá´©Å  Weak - Security posture requires immediate attention." -ForegroundColor Red
+        Write-Host "      ÔÇó Only $highSecurityPolicies high-impact security policies deployed" -ForegroundColor Red
         if ($alzGapCount -gt 0) {
-            Write-Host "      • $alzGapCount Azure Landing Zone recommended policies missing" -ForegroundColor Red
-            Write-Host "      • This represents critical security and governance gaps" -ForegroundColor Red
+            Write-Host "      ÔÇó $alzGapCount Azure Landing Zone recommended policies missing" -ForegroundColor Red
+            Write-Host "      ÔÇó This represents critical security and governance gaps" -ForegroundColor Red
         }
     }
     
@@ -1030,7 +962,7 @@ if ($ShowRecommendations) {
         $results | Where-Object { $_.'Security Impact' -eq 'High' } | ForEach-Object {
             $effectInfo = if ($_.'Effect Type' -ne '(not specified)') { "[$($_.'Effect Type')]" } else { "" }
             $enforcementInfo = if ($_.'Enforcement Mode' -eq 'DoNotEnforce') { " (NOT ENFORCED)" } else { "" }
-            Write-Host "     • $($_.'Policy Name') $effectInfo$enforcementInfo" -ForegroundColor Gray
+            Write-Host "     ÔÇó $($_.'Policy Name') $effectInfo$enforcementInfo" -ForegroundColor Gray
         }
         Write-Host "`n   Note: High security impact policies include:" -ForegroundColor DarkGray
         Write-Host "   - Deny/Block policies preventing non-compliant deployments" -ForegroundColor DarkGray
@@ -1038,13 +970,13 @@ if ($ShowRecommendations) {
         Write-Host "   - Policies protecting network security, encryption, and data access" -ForegroundColor DarkGray
         Write-Host "   - Defender for Cloud and backup/disaster recovery policies" -ForegroundColor DarkGray
     } else {
-        Write-Host "`n   ❌ CRITICAL: No high security impact policies found!" -ForegroundColor Red
+        Write-Host "`n   ÔØî CRITICAL: No high security impact policies found!" -ForegroundColor Red
         Write-Host "   Your environment lacks essential security controls." -ForegroundColor Red
     }
     
     # Azure Landing Zone specific recommendations
     if ($alzGapCount -gt 0) {
-        Write-Host "`n   🛡️  AZURE LANDING ZONE RECOMMENDATIONS:" -ForegroundColor Cyan
+        Write-Host "`n   ­ƒøí´©Å  AZURE LANDING ZONE RECOMMENDATIONS:" -ForegroundColor Cyan
         Write-Host "   Missing $alzGapCount ALZ recommended policies that provide:" -ForegroundColor White
         
         # Categorize ALZ gaps by security impact
@@ -1059,16 +991,16 @@ if ($ShowRecommendations) {
         }
         
         if ($alzSecurityGaps.Count -gt 0) {
-            Write-Host "      • Security Controls ($($alzSecurityGaps.Count) missing): Network isolation, access control, encryption" -ForegroundColor Red
+            Write-Host "      ÔÇó Security Controls ($($alzSecurityGaps.Count) missing): Network isolation, access control, encryption" -ForegroundColor Red
         }
         if ($alzRemediationGaps.Count -gt 0) {
-            Write-Host "      • Auto-Remediation ($($alzRemediationGaps.Count) missing): Automated configuration and compliance" -ForegroundColor Yellow
+            Write-Host "      ÔÇó Auto-Remediation ($($alzRemediationGaps.Count) missing): Automated configuration and compliance" -ForegroundColor Yellow
         }
         if ($alzComplianceGaps.Count -gt 0) {
-            Write-Host "      • Monitoring & Audit ($($alzComplianceGaps.Count) missing): Visibility and compliance tracking" -ForegroundColor Yellow
+            Write-Host "      ÔÇó Monitoring & Audit ($($alzComplianceGaps.Count) missing): Visibility and compliance tracking" -ForegroundColor Yellow
         }
         
-        Write-Host "`n   📖 RECOMMENDED ACTIONS:" -ForegroundColor Cyan
+        Write-Host "`n   ­ƒôû RECOMMENDED ACTIONS:" -ForegroundColor Cyan
         Write-Host "   1. Review the 'LANDING ZONE GAPS' section above for specific missing policies" -ForegroundColor White
         Write-Host "   2. Prioritize implementing Deny/Block policies for immediate security hardening" -ForegroundColor White
         Write-Host "   3. Deploy monitoring and audit policies for compliance visibility" -ForegroundColor White
@@ -1076,109 +1008,13 @@ if ($ShowRecommendations) {
         Write-Host "   5. Reference Azure Landing Zone documentation: https://aka.ms/alz" -ForegroundColor White
     }
     
-    Write-Host "`n📋 BEST PRACTICES:" -ForegroundColor Yellow
+    Write-Host "`n­ƒôï BEST PRACTICES:" -ForegroundColor Yellow
     Write-Host "   1. Test blocking policies (Deny) in DoNotEnforce mode first" -ForegroundColor White
     Write-Host "   2. Regularly review audit logs for Audit policies and consider upgrading to Deny" -ForegroundColor White
     Write-Host "   3. Ensure DINE/Modify policies have proper managed identities and RBAC" -ForegroundColor White
     Write-Host "   4. Monitor policy compliance in Azure Policy compliance dashboard" -ForegroundColor White
     Write-Host "   5. Document exceptions using policy exemptions rather than disabling policies" -ForegroundColor White
     Write-Host "   6. Review policies quarterly for relevance and effectiveness" -ForegroundColor White
-    
-    # Cyber Essentials Plus Compliance Analysis
-    Write-Host "`n🇬🇧 CYBER ESSENTIALS PLUS COMPLIANCE:" -ForegroundColor Cyan
-    Write-Host "   ⚠️  EXPERIMENTAL FEATURE - Policy mappings are approximate and may not be 100% accurate." -ForegroundColor Yellow
-    Write-Host "   This does NOT provide official CE+ certification. Use for guidance only." -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "   Mapping UK Cyber Essentials Plus requirements to deployed Azure policies..." -ForegroundColor White
-    
-    $ceMissingControls = @()
-    $ceDeployedControls = @()
-    
-    foreach ($ceCategory in $CyberEssentialsPlusMapping.Keys) {
-        Write-Host "`n   📋 $ceCategory" -ForegroundColor Yellow
-        foreach ($cePolicy in $CyberEssentialsPlusMapping[$ceCategory]) {
-            $matchingPolicy = $results | Where-Object { 
-                $_.'Policy Name' -like "*$cePolicy*" -or 
-                $_.'Assignment Name' -like "*$cePolicy*" -or 
-                $_.'Display Name' -like "*$cePolicy*"
-            } | Select-Object -First 1
-            
-            if ($matchingPolicy) {
-                $enforcementStatus = if ($matchingPolicy.'Enforcement Mode' -eq 'DoNotEnforce') { " (NOT ENFORCED)" } else { "" }
-                Write-Host "      ✓ $cePolicy$enforcementStatus" -ForegroundColor Green
-                $ceDeployedControls += [PSCustomObject]@{
-                    Category = $ceCategory
-                    Control = $cePolicy
-                    AssignmentName = $matchingPolicy.'Assignment Name'
-                    EnforcementMode = $matchingPolicy.'Enforcement Mode'
-                    NonCompliantResources = $matchingPolicy.'Non-Compliant Resources'
-                }
-            } else {
-                Write-Host "      ✗ $cePolicy (MISSING)" -ForegroundColor Red
-                $ceMissingControls += [PSCustomObject]@{
-                    Category = $ceCategory
-                    Control = $cePolicy
-                }
-            }
-        }
-    }
-    
-    # Summary
-    $totalCEControls = ($CyberEssentialsPlusMapping.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
-    $ceCompliance = [math]::Round(($ceDeployedControls.Count / $totalCEControls) * 100, 1)
-    
-    Write-Host "`n   📊 COMPLIANCE SUMMARY:" -ForegroundColor Cyan
-    Write-Host "      Total CE+ Controls Mapped: $totalCEControls" -ForegroundColor White
-    Write-Host "      Deployed: $($ceDeployedControls.Count)" -ForegroundColor Green
-    Write-Host "      Missing: $($ceMissingControls.Count)" -ForegroundColor Red
-    Write-Host "      Compliance Score: $ceCompliance%" -ForegroundColor $(if ($ceCompliance -ge 80) { 'Green' } elseif ($ceCompliance -ge 50) { 'Yellow' } else { 'Red' })
-    
-    if ($ceMissingControls.Count -gt 0) {
-        Write-Host "`n   ⚠️  RECOMMENDED ACTIONS:" -ForegroundColor Yellow
-        Write-Host "      1. Review and assign missing policy controls listed above" -ForegroundColor White
-        Write-Host "      2. Focus on high-priority categories: Firewalls and Access Control" -ForegroundColor White
-        Write-Host "      3. Reference: https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus?utm_source=copilot.com" -ForegroundColor White
-    }
-    
-    # Export CE+ compliance to CSV if requested
-    if ($ExportCEPCompliance) {
-        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $cepFileName = "CyberEssentialsPlus_Compliance_$timestamp.csv"
-        $cepPath = Join-Path -Path (Get-Location) -ChildPath $cepFileName
-        
-        Write-Host "`n   📊 Exporting Cyber Essentials Plus compliance report..." -ForegroundColor Cyan
-        
-        # Combine deployed and missing controls
-        $cepExportData = @()
-        
-        foreach ($deployed in $ceDeployedControls) {
-            $cepExportData += [PSCustomObject]@{
-                'CE+ Category' = $deployed.Category
-                'Required Control' = $deployed.Control
-                'Status' = 'Deployed'
-                'Assignment Name' = $deployed.AssignmentName
-                'Enforcement Mode' = $deployed.EnforcementMode
-                'Non-Compliant Resources' = $deployed.NonCompliantResources
-                'Recommendation' = if ($deployed.EnforcementMode -eq 'DoNotEnforce') { 'Enable enforcement' } else { 'Monitor compliance' }
-            }
-        }
-        
-        foreach ($missing in $ceMissingControls) {
-            $cepExportData += [PSCustomObject]@{
-                'CE+ Category' = $missing.Category
-                'Required Control' = $missing.Control
-                'Status' = 'Missing'
-                'Assignment Name' = 'N/A'
-                'Enforcement Mode' = 'N/A'
-                'Non-Compliant Resources' = 'N/A'
-                'Recommendation' = 'Assign this policy to meet CE+ requirements'
-            }
-        }
-        
-        $cepExportData | Export-Csv -Path $cepPath -NoTypeInformation -Encoding UTF8
-        Write-Host "   ✓ CE+ compliance report exported to: $cepPath" -ForegroundColor Green
-        Write-Host "   ⚠️  Note: This is an experimental feature. Policy mappings are approximate." -ForegroundColor Yellow
-    }
 }
 
 # Export to CSV if requested
@@ -1199,12 +1035,12 @@ if ($Export) {
     
     Write-Progress -Activity "Exporting to CSV" -Completed -Id 2
     
-    Write-Host "✓ Policy assignments exported to: $csvPath" -ForegroundColor Green
+    Write-Host "Ô£ô Policy assignments exported to: $csvPath" -ForegroundColor Green
 } else {
     Write-Host "`nTo export results to CSV, use the -Export switch" -ForegroundColor Gray
 }
 
-Write-Host "`n═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "`nÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ" -ForegroundColor Cyan
 Write-Host "Total policy assignments found: $($results.Count)" -ForegroundColor Green
 Write-Host "Execution completed successfully!" -ForegroundColor Green
-Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ" -ForegroundColor Cyan

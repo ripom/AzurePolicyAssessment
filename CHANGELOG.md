@@ -5,6 +5,42 @@ All notable changes to the Azure Policy & Compliance Assessment Tool will be doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-02-06
+
+### 🇬🇧 Cyber Essentials Plus Compliance Mapping (Experimental)
+
+#### Added
+- **Cyber Essentials Plus Assessment**: Maps UK NCSC Cyber Essentials Plus requirements to Azure Policy assignments
+- **5 CE+ Categories**: Patch Management, Firewalls & Internet Boundary, Secure Configuration, Malware Protection, Access Control
+- **24 Policy Mappings**: Comprehensive mapping of CE+ requirements to Azure built-in policies
+- **Compliance Score**: Automatic calculation of CE+ compliance percentage
+- **CSV Export**: New `-ExportCEPCompliance` parameter to export compliance report
+- **Gap Analysis**: Identifies deployed vs. missing controls with recommendations
+- **Documentation**: New `CYBER-ESSENTIALS-PLUS.md` with detailed mapping, limitations, and FAQ
+
+#### Changed
+- **Version**: Updated from 2.1.0 to 2.2.0
+- **Script Help**: Added `-ExportCEPCompliance` parameter documentation and examples
+- **README**: Updated with CE+ feature highlights and usage examples
+
+#### Experimental Notice
+⚠️ **This feature is experimental**:
+- Policy mappings are approximate and may not be 100% accurate
+- Display names may vary across Azure environments
+- Custom policies may not be detected
+- Does not provide official CE+ certification
+- Community feedback welcome - see [CYBER-ESSENTIALS-PLUS.md](CYBER-ESSENTIALS-PLUS.md) for details
+
+#### CSV Export Format
+The `-ExportCEPCompliance` generates a CSV with:
+- CE+ Category
+- Required Control (Azure Policy name)
+- Status (Deployed/Missing)
+- Assignment Name
+- Enforcement Mode
+- Non-Compliant Resources
+- Recommendation
+
 ## [2.1.0] - 2026-02-05
 
 ### 🚀 Major Performance Enhancement
@@ -170,5 +206,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 For issues, questions, or feature requests, please review the documentation:
 - [README.md](README.md) - Main documentation
-- [COMPLIANCE-USAGE-GUIDE.md](COMPLIANCE-USAGE-GUIDE.md) - Compliance features
+- [CYBER-ESSENTIALS-PLUS.md](CYBER-ESSENTIALS-PLUS.md) - CE+ compliance mapping
 - [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) - Execution modes
