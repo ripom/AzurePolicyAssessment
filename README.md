@@ -1,6 +1,6 @@
 # Azure Policy Assignments Assessment Script
 
-**Version 2.2.0** | [View Changelog](CHANGELOG.md)
+**Version 2.2.1** | [View Changelog](CHANGELOG.md)
 
 > ⚠️ **DISCLAIMER**  
 > This is **NOT an official Microsoft tool**. It is provided as-is with **no warranties or guarantees**. Support is provided on a **best-effort basis** by the community. Results may not be 100% accurate—always verify against Azure Portal and official Microsoft tools. Use at your own risk.
@@ -20,6 +20,12 @@ This PowerShell script scans your Azure tenant and reports on **all policy assig
 ---
 
 ## Prerequisites
+
+### PowerShell Version
+
+- **PowerShell 7.0 or later** is required. Windows PowerShell 5.1 is **not supported**.
+- To check your version: `$PSVersionTable.PSVersion`
+- Install PowerShell 7: [https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell)
 
 ### Required Modules
 

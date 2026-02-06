@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 <#
 .SYNOPSIS
     Lists all Azure Policy assignments from all management groups with detailed information using Azure Resource Graph.
@@ -71,10 +73,11 @@
     Lists policies with recommendations and exports Cyber Essentials Plus compliance report to CSV.
 
 .NOTES
-    Version: 2.2.0
-    Last Updated: February 5, 2026
+    Version: 2.2.1
+    Last Updated: February 6, 2026
     Author: Azure Policy Assessment Tool
     
+    Requires PowerShell 7.0 or later (Windows PowerShell 5.1 is not supported)
     Requires Azure PowerShell modules: Az.Accounts, Az.Resources, Az.ResourceGraph
     Requires appropriate Azure RBAC permissions (typically Management Group Reader)
     For compliance data, policies must be assigned and evaluated (may take time for new assignments)
@@ -82,6 +85,7 @@
     Performance: Uses Azure Resource Graph for fast queries (10-50x faster than traditional enumeration)
     
     Version History:
+    - 2.2.1 (2026-02-06): Added #Requires -Version 7.0 directive to enforce PowerShell 7+ requirement
     - 2.1.0 (2026-02-05): Major performance enhancement using Azure Resource Graph (ARG):
                           - 10-50x faster execution (seconds instead of minutes)
                           - Simplified code with single queries instead of nested loops
@@ -117,7 +121,7 @@ param(
 )
 
 # Script Version
-$ScriptVersion = "2.2.0"
+$ScriptVersion = "2.2.1"
 $ScriptLastUpdated = "2026-02-06"
 
 # Cyber Essentials Plus Mapping to Azure Policies
