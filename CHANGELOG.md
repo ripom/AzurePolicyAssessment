@@ -5,6 +5,171 @@ All notable changes to the Azure Policy & Compliance Assessment Tool will be doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-02-18
+
+### � Major Release — Complete Interface Overhaul & Accuracy Upgrade
+
+This release consolidates all changes from v2.3 through v2.6 into a single major version, introducing a simplified command interface, real policy-definition-based classification, CE+ v3.2 test specification support, delta/trending capabilities, and updated project attribution.
+
+### 🔧 Cost & Security Scoring Accuracy Fix for Parameterised Initiatives
+
+#### Fixed — Scoring Engine
+- **Display name resolution**: `Get-PolicyRecommendation` now receives the human-readable display name (e.g. "Defender for SQL Servers on Machines provisioning") instead of the definition GUID. All keyword detectors (`defender`, `sentinel`, `backup`, `asc default`, etc.) now fire correctly.
+- **Parameterised cost scoring**: Added `Parameterised|Multiple` handling to the cost switch — infers cost from category (Security Center/Monitoring/Backup → +30, Network/Compute → +15, other → +5) instead of scoring 0.
+- **Parameterised security scoring**: Same fix for security — Security Center/Defender for Cloud → +15, Network/Identity → +10, other → +5.
+- **Parameterised operational overhead**: New branch infers overhead from category (Security Center/Monitoring/Backup → High, Network/Compute/SQL → Medium, Regulatory Compliance → Medium, other → Low).
+- **Risk level enforcement bonus**: Active enforcement bonus (-10 risk points) now applies to initiative effects containing Deny/DINE/Modify keywords, not just exact string matches.
+- **Keyword regex update**: Added `security.?center` and `asc.?default` to both `$isSecurityName` and `$isCostName` patterns.
+- **Context-aware recommendations**: New recommendation text for parameterised initiatives (Defender → licensing cost advice, Monitoring → ingestion cost advice, Regulatory → control group mapping advice).
+
+#### Fixed — Impact Examples
+| Policy | Before | After |
+|--------|--------|-------|
+| Defender for SQL Servers on Machines provisioning | Low / Low / Low | **High / High / High** |
+| ASC Default | Low / Low / Low | **High / High / High** |
+| ASC OpenSourceRelationalDatabasesProtection | Low / Low / Low | **Medium / High / High** |
+| Sentinel - Configure VMs to run Azure Monitor Agent | Low / Low / Low | **Medium / High / High** |
+
+#### Enhanced — Report Legends & Documentation
+- **Cost & Overhead Legend**: Added real-world cost examples (Defender ~$15/server/month, Log Analytics ~$2.76/GB), explained parameterised initiative scoring
+- **Security Legend**: Added parameterised initiative scoring explanation with category-based inference
+- **Calculation details**: Updated "How are Cost/Security calculated?" panels with new Parameterised × Category signal row
+- **Glossary**: Cost Impact and Operational Overhead entries now include full scoring formulas and parameterised initiative handling
+
+### 📋 Policy Exemptions, YAML Database & Enhanced Architecture Insights
+
+#### Added — Policy Exemptions
+- **Exemption discovery**: Queries all `microsoft.authorization/policyexemptions` from Azure Resource Graph
+- **Scope derivation from resource ID**: Correctly extracts scope from the exemption `id` (ARG exemptions don't have `properties.scope`)
+- **Exemption detail**: Shows display name, category (Waiver/Mitigated), scope type, scope name, coverage (full/partial), expiry, and description
+- **Exemptions by Assignment**: Grouped view showing which assignments have exemptions and how many
+- **Integrated into Engineering Report**: Exemptions displayed as a subsection inside Engineering Report (not a standalone tab) for better context
+- **Exemptions in console output**: Summary counts (active, expired, waiver, mitigated) shown during execution
+- **Exemption lookup**: Each policy assignment result includes an `Exemptions` count
+
+#### Added — YAML Database Export & Delta Comparison
+- **`-Output YAML`**: Exports complete assessment snapshot (assignments, compliance, exemptions, CE+ results) to a YAML database file
+- **`-DeltaYAML <path>`**: Compares current run against a previous YAML snapshot. Reports:
+  - New and removed assignments
+  - Changed assignments (property-level diffs with previous → current values)
+  - Effect type shifts
+  - Exemption changes (new/removed)
+  - CE+ previous results
+  - Overall posture trend (IMPROVING / STABLE / DEGRADING)
+- **Delta in HTML**: When `-DeltaYAML` is used with `-Output HTML`, the delta assessment appears as a dedicated section
+- **Delta in console**: `Show-YAMLDelta` displays colour-coded delta summary in the terminal
+- **Composite matching key**: Uses `assignmentName|||scope` to prevent false delta matches across scopes
+
+#### Added — Enhanced Architecture Insights
+- **Control Type Balance**: Three individual progress bars (one per control type) with:
+  - Suggested percentage ranges (honestly labelled as opinionated tool guidance, not WAF targets)
+  - Dashed green bands showing suggested ranges for each
+  - Health colour coding: green (in range), amber (close), red (out of range)
+  - Overall balance badge: Well Balanced / Moderate / Imbalanced
+  - Combined distribution bar
+  - Collapsible explanation panel with disclaimer and reference to actual [WAF Security pillar](https://learn.microsoft.com/en-us/azure/well-architected/security/)
+- **Expandable Anti-Patterns**: Each anti-pattern is now a collapsible card with:
+  - What this means / Why it matters
+  - Granular list of affected scopes or policies (names, types, NC counts)
+  - Recommended actions
+  - Links to official Microsoft documentation (Policy effects, enforcement mode, safe deployment practices, CAF governance, remediation, limits)
+- **Duplicate detection**: New anti-pattern detects the same policy definition assigned multiple times at the same scope
+- **AP severity colours**: Red border for critical (enforcement gaps), amber for others
+
+#### Added — Documentation & Glossary Updates
+- **Glossary expanded**: 19 → 23 terms. New: Parameterised, Disabled, Control Type Balance, Anti-Pattern, Delta Assessment
+- **Glossary docs links**: Assignment, Deny, DINE, DoNotEnforce, Disabled, Exemption entries now link to official Microsoft docs
+- **Risk Level & Security Impact**: Glossary entries now include the actual scoring formula
+- **"How to Read" guide**: Updated section descriptions, expanded Key Terms from 7 to 11
+- **Non-Compliant Policies**: Renamed table from "Non-Compliant Resources — Policy Perspective" to "Non-Compliant Policies"
+
+#### Changed
+- **Version**: Updated to 3.0.0
+- **Section count**: 8 base sections (+ optional Delta Assessment with `-DeltaYAML`); exemptions folded into Engineering Report
+- **Navigation**: Removed standalone Exemptions tab from nav bar
+- **Exemption scope filter**: Uses `id`-based filtering instead of non-existent `properties.scope` for exemptions
+- **`createdOn` field**: Uses `coalesce()` to try `properties.metadata.createdOn` first for exemptions
+
+## [3.0.0] - 2026-02-10
+
+### 🚀 Major Release — Complete Interface Overhaul & Accuracy Upgrade
+
+This release consolidates all changes from v2.3 through v2.6 into a single major version, introducing a simplified command interface, real policy-definition-based classification, CE+ v3.2 test specification support, delta/trending capabilities, and updated project attribution.
+
+### 🔄 Automatic Update Check
+
+- **VERSION.json**: New machine-readable version manifest in the repository root containing version, release date, highlights, and download URL
+- **Startup check**: Script fetches VERSION.json from GitHub at launch (5-second timeout, silent on failure)
+- **Update banner**: When a newer version is detected, displays a prominent banner with version comparison, key highlights (up to 5), release notes URL, and download link
+- **Non-blocking**: Network errors, offline mode, or rate limiting are silently ignored — the script continues normally
+- **`-Update` self-update**: New `-Update` switch downloads the latest script from GitHub, validates it has no parse errors, creates a versioned backup (e.g., `Get-PolicyAssignments-v3.0.0-backup.ps1`), replaces the local file, and exits so the user can re-run with the new version. No Azure login required
+
+#### Attribution
+- **Project Ownership**: Updated all disclaimers to reflect that this project is made and maintained by **Riccardo Pomato**
+- Removed references to "community-maintained" across console output, HTML header banner, and HTML footer disclaimer
+
+#### Added — Simplified Command Interface (formerly v2.5)
+- **`-Output` parameter** (`CSV`, `HTML`, `NC`, `All`): Replaces `-Export`, `-ExportHTML`, `-ExportNonCompliant` switches
+- **`-CEP` parameter** (`Show`, `Test`, `Export`, `Full`): Replaces `-ShowCEPCompliance`, `-RunCEPTests`, `-ExportCEPCompliance` switches
+- **`-Full` switch**: Runs a comprehensive assessment with all features enabled (equivalent to `-Output All -CEP Full`)
+- **Initiative effect resolution**: Shows actual member-policy effects instead of generic "(Initiative)" label
+- Legacy switches remain functional (backward compatible) but are hidden from tab-completion
+
+#### Added — Scope Handling & Filtering (formerly v2.6)
+- **`-ManagementGroup` parameter**: Filter assessment to a specific management group by name or ID
+- **`-Subscription` parameter**: Filter assessment to a specific subscription by name or ID
+- **All scopes included by default**: Management Groups, Subscriptions, and Resource Groups are assessed automatically
+- Removed `-Scope`, `-IncludeSubscriptions`, and `-IncludeResourceGroups` parameters
+
+#### Added — Accuracy & Performance Overhaul (formerly v2.4)
+- **Real policy definition metadata**: Replaced heuristic name-regex classifications with actual policy definition metadata (category, effect) via batch ARG query — eliminates misclassifications
+- **Batch policy definition resolution**: Single ARG query replaces N individual `Get-AzPolicyDefinition` calls — 10–100x faster for large tenants
+- **`-QuickAssess` parameter**: Concise one-page summary with top KPIs, top 5 enforcement gaps, top 5 non-compliant assignments, and key recommendations
+- **`-BaselinePath` parameter removed**: Delta/trending now uses `-DeltaYAML` exclusively for YAML-based snapshot comparison
+- **Azure Landing Zone Analysis in HTML report**: New dedicated section (section 6) showing ALZ coverage metrics, category breakdown, missing policies, and audit-only policies
+- **Simplified HTML report**: Removed redundant data, tightened sections for clarity
+- Effect type detection now uses actual policy definition effect field
+
+#### Added — CE+ v3.2 Test Specification (formerly v2.3)
+- **CE+ v3.2 Test Cases (TC1–TC5)** via `-CEP Test`:
+  - **TC1**: Remote Vulnerability Assessment (public IPs, NSG rules, Defender findings, storage)
+  - **TC2**: Patching / Authenticated Scan (missing patches, CVSS 7+, EOL software)
+  - **TC3**: Malware Protection (endpoint protection, Defender plans, signatures)
+  - **TC4**: MFA Configuration (MFA assessments, conditional access policies)
+  - **TC5**: Account Separation (RBAC privileged roles, admin controls)
+- **MANUAL status type**: Subtests requiring physical/assessor verification are flagged MANUAL with checklists
+- **Initiative-based CE compliance**: Replaced static CE policy mapping with built-in 'UK NCSC Cyber Essentials v3.1' Azure Policy Initiative for accurate compliance assessment
+- Queries actual initiative definition, checks assignments, and reports per-policy compliance grouped by CE control areas
+
+#### Changed
+- **Version**: Updated from 2.2.x to 3.0.0
+- **Disclaimer**: All disclaimers now credit Riccardo Pomato as author/maintainer
+- **Parameter interface**: Unified `-Output` and `-CEP` parameters as the primary interface
+- **Scope handling**: All scopes assessed by default (no opt-in switches needed)
+- **Classification engine**: Real policy metadata replaces heuristic regex matching
+
+#### Removed
+- `-Scope` parameter
+- `-IncludeSubscriptions` switch
+- `-IncludeResourceGroups` switch
+- Community attribution in disclaimers
+
+#### Migration from v2.2
+| Old (v2.2) | New (v3.0) |
+|------------|------------|
+| `-Export` | `-Output CSV` |
+| `-ExportHTML` | `-Output HTML` |
+| `-ExportNonCompliant` | `-Output NC` |
+| `-Export -ExportHTML -ExportNonCompliant` | `-Output All` |
+| `-ShowCEPCompliance` | `-CEP Show` |
+| `-RunCEPTests` | `-CEP Test` |
+| `-ExportCEPCompliance` | `-CEP Export` |
+| All three CE switches | `-CEP Full` |
+| `-IncludeSubscriptions -IncludeResourceGroups` | *(automatic — all scopes included by default)* |
+| `-ShowRecommendations` | *(recommendations now always shown)* |
+
+> **Note**: Old switches still work for backward compatibility but are hidden from tab-completion.
+
 ## [2.2.0] - 2026-02-06
 
 ### 🇬🇧 Cyber Essentials Plus Compliance Mapping (Experimental)

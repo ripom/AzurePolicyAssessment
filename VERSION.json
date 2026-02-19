@@ -1,0 +1,19 @@
+{
+  "version": "3.0.0",
+  "releaseDate": "2026-02-19",
+  "minimumPowerShellVersion": "7.0",
+  "highlights": [
+    "Simplified CLI: -Output and -CEP parameters replace 6+ legacy switches",
+    "Azure Landing Zone Analysis section in HTML report with ALZ coverage metrics",
+    "Policy exemptions: discovery, HTML report integration, YAML delta tracking",
+    "YAML database export (-Output YAML) and delta comparison (-DeltaYAML)",
+    "Real policy definition metadata via batch ARG query — no more regex guessing",
+    "CE+ v3.2 Test Specification (TC1-TC5) aligned to NCSC specification",
+    "Cost & security scoring accuracy fix for parameterised initiatives",
+    "Enhanced anti-patterns with expandable cards and Microsoft docs references",
+    "Control type balance with suggested ranges and honest WAF attribution",
+    "Quick Assess mode (-QuickAssess) for one-page executive summary"
+  ],
+  "releaseNotesUrl": "https://github.com/ripom/AzurePolicyAssessment/blob/main/WHATS-NEW-v3.0.md",
+  "scriptUrl": "https://raw.githubusercontent.com/ripom/AzurePolicyAssessment/main/Get-PolicyAssignments.ps1"
+}

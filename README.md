@@ -1,9 +1,11 @@
 # Azure Policy Assignments Assessment Script
 
-**Version 2.2.1** | [View Changelog](CHANGELOG.md)
+**Version 3.0.0** | [View Changelog](CHANGELOG.md) | [What's New](WHATS-NEW-v3.0.md)
 
+> **Author**: This project is made and maintained by **Riccardo Pomato**.
+>
 > ⚠️ **DISCLAIMER**  
-> This is **NOT an official Microsoft tool**. It is provided as-is with **no warranties or guarantees**. Support is provided on a **best-effort basis** by the community. Results may not be 100% accurate—always verify against Azure Portal and official Microsoft tools. Use at your own risk.
+> This is **NOT an official Microsoft tool**. It is provided as-is with **no warranties or guarantees**. Results may not be 100% accurate — always verify against Azure Portal and official Microsoft tools. Use at your own risk.
 
 ## What Does This Script Do?
 
@@ -12,8 +14,9 @@ This PowerShell script scans your Azure tenant and reports on **all policy assig
 - A **console summary** of every directly-assigned policy (excluding inherited), grouped by scope
 - **Security, cost, and compliance impact** ratings for each assignment
 - **Azure Landing Zone gap analysis** — highlights missing policies compared to the official ALZ reference
-- **UK Cyber Essentials Plus mapping** *(experimental)* — maps deployed policies to CE+ requirements
-- Optional **CSV exports** for offline analysis and reporting
+- **UK Cyber Essentials Plus mapping** with [CE+ v3.2 test specification](https://www.ncsc.gov.uk/files/cyber-essentials-plus-test-specification-v3-2.pdf) (TC1–TC5)
+- **Policy exemptions** — lists all exemptions with scope, category, expiry, and coverage detail
+- Optional **CSV, HTML, YAML** exports for offline analysis, reporting, and delta comparison
 
 👉 Jump to [Prerequisites](#prerequisites) · [Usage](#usage) · [Parameters](#parameters)
 
@@ -57,11 +60,7 @@ The account running the script needs:
 
 ### Execution Modes
 
-The script supports multiple enumeration scopes:
-
-1. **Management Groups Only** (Default) - Assess policies at MG level
-2. **Include Subscriptions** - Use `-IncludeSubscriptions` to add subscription-level policies
-3. **Full Coverage** - Use `-IncludeSubscriptions -IncludeResourceGroups` for complete inventory
+The script assesses all scopes by default (Management Groups, Subscriptions, Resource Groups). Use `-ManagementGroup` or `-Subscription` to filter to a specific scope.
 
 See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
 
@@ -74,29 +73,35 @@ See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
 
 2. **Run the script**:
    ```powershell
-   # Basic execution - Management Groups only
+   # Basic execution — all scopes assessed by default
    .\Get-PolicyAssignments.ps1
    
-   # With recommendations
-   .\Get-PolicyAssignments.ps1 -ShowRecommendations
-   
-   # Cyber Essentials Plus compliance assessment (NEW in v2.2!)
-   .\Get-PolicyAssignments.ps1 -ShowRecommendations -ExportCEPCompliance
+   # Quick executive summary
+   .\Get-PolicyAssignments.ps1 -QuickAssess
+
+   # Export to CSV and HTML
+   .\Get-PolicyAssignments.ps1 -Output CSV,HTML
+
+   # Cyber Essentials Plus compliance with test cases
+   .\Get-PolicyAssignments.ps1 -CEP Full
+
+   # Full assessment — everything enabled
+   .\Get-PolicyAssignments.ps1 -Full
    
    # Specify tenant ID (skip tenant selection prompt)
    .\Get-PolicyAssignments.ps1 -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
    
-   # Include subscription-level policies
-   .\Get-PolicyAssignments.ps1 -IncludeSubscriptions -Export
-   
-   # Full coverage (MG + Subscriptions + Resource Groups)
-   .\Get-PolicyAssignments.ps1 -IncludeSubscriptions -IncludeResourceGroups -Export
-   
-   # Complete assessment with recommendations
-   .\Get-PolicyAssignments.ps1 -IncludeSubscriptions -ShowRecommendations -Export
-   
-   # Automated run for specific tenant
-   .\Get-PolicyAssignments.ps1 -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" -IncludeSubscriptions -Export
+   # Filter to a specific management group
+   .\Get-PolicyAssignments.ps1 -ManagementGroup "mg-platform" -Output HTML
+
+   # Filter to a specific subscription
+   .\Get-PolicyAssignments.ps1 -Subscription "Production" -Output CSV
+
+   # Export YAML database for delta comparison
+   .\Get-PolicyAssignments.ps1 -Output YAML
+
+   # Compare against a previous YAML snapshot
+   .\Get-PolicyAssignments.ps1 -DeltaYAML ".\PolicyAssessment_20260218.yaml" -Output HTML
    ```
 
 3. **Select a tenant** when prompted (if you have access to multiple tenants and didn't specify -TenantId)
@@ -107,32 +112,34 @@ See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
 
 ### Parameters
 
-- **`-ShowRecommendations`**: Generates comprehensive recommendations for each policy assignment including:
-  - **Security Impact Classification** (High/Medium/Low/None):
-    - **High**: Deny/DeployIfNotExists/Modify effects, or policies protecting critical areas (network security, encryption, public access, Defender for Cloud, backup/DR)
-    - **Medium**: Audit policies, governance policies, general compliance controls
-    - **Low**: Informational policies, tagging policies
-    - **None**: Disabled policies or those in DoNotEnforce mode
-  - **Security Posture Assessment**: Shows count and detailed list of high-impact security policies currently deployed, with effect types and enforcement status
-  - **Cyber Essentials Plus Compliance Mapping**: Maps CE+ requirements to deployed Azure policies (v2.2+)
-  - Cost Impact Analysis
-  - Compliance Impact Assessment
-  - Operational Overhead Evaluation
-  - Risk Level Assessment
-  - Azure Landing Zone Coverage Analysis (compares against official ALZ Library)
-  - Actionable recommendations with gap analysis
+- **`-Output`** (`CSV`, `HTML`, `NC`, `YAML`, `All`): Controls which exports are generated. Accepts one or more comma-separated values.
+  - `CSV` — Export policy assignments to timestamped CSV file
+  - `HTML` — Generate comprehensive interactive HTML report
+  - `NC` — Export all non-compliant resources to CSV
+  - `YAML` — Export full assessment database to YAML (for delta comparisons)
+  - `All` — All of the above
 
-- **`-Export`**: When specified, exports results to a CSV file. Without this switch, no file is exported.
+- **`-CEP`** (`Show`, `Test`, `Export`, `Full`): Controls Cyber Essentials compliance features.
+  - `Show` — Display CE v3.1 compliance analysis in console
+  - `Test` — Run CE+ v3.2 Test Specification (TC1–TC5)
+  - `Export` — Export CE compliance data to CSV
+  - `Full` — All of the above
 
-- **`-FileName`**: Custom filename for CSV export (e.g., "MyReport.csv"). If not provided, uses default timestamped format `PolicyAssignments_YYYYMMDD_HHMMSS.csv`. Only used when `-Export` is specified.
+- **`-ManagementGroup`**: Filter the assessment to a specific Management Group by name or ID.
 
-- **`-IncludeSubscriptions`**: When specified, includes policy assignments from all subscriptions in addition to management groups.
+- **`-Subscription`**: Filter the assessment to a specific Subscription by name or ID.
 
-- **`-IncludeResourceGroups`**: When specified, includes policy assignments from all resource groups. Requires `-IncludeSubscriptions` to be effective.
+- **`-TenantId`**: Optional tenant ID to skip the tenant selection prompt. Useful for automation.
 
-- **`-TenantId`**: Optional tenant ID to use for the assessment. When specified, skips the tenant selection prompt. Useful for automation scenarios or when working with a specific tenant. Example: `-TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"`
+- **`-FileName`**: Custom filename for CSV export (e.g., `"MyReport.csv"`). Used with `-Output CSV`.
 
-- **`-ExportCEPCompliance`**: When specified with `-ShowRecommendations`, exports Cyber Essentials Plus compliance results to a CSV file. See [Cyber Essentials Plus](#cyber-essentials-plus-compliance) section below.
+- **`-QuickAssess`**: Produces a concise one-page Quick Assessment: posture verdict, top 5 gaps, top 5 non-compliant assignments, and key actions.
+
+- **`-DeltaYAML`**: Path to a previous YAML assessment database (generated with `-Output YAML`). Produces a comprehensive policy-by-policy comparison showing new, removed, and changed assignments, compliance drift, effect type shifts, exemption changes, and overall posture trend.
+
+- **`-Full`**: Runs a comprehensive assessment with all features enabled (equivalent to `-Output All -CEP Full`).
+
+- **`-Update`**: Self-update switch. Downloads the latest version of the script from GitHub, validates it has no parse errors, creates a backup of the current version (e.g., `Get-PolicyAssignments-v3.0.0-backup.ps1`), replaces the local script file, and exits so you can re-run with the new version. No Azure login required.
 
 ### Example Output
 
@@ -187,9 +194,7 @@ Deploy-MDFC-OssDb        Deploy Microsoft Defen... Policy      Management Group 
 
 This PowerShell script analyzes Azure Policy assignments across all management groups in an Azure tenant. It retrieves policy assignments directly assigned to each management group, excluding inherited policies from parent management groups, providing a clear view of the policy governance structure.
 
-**NEW in v2.2**: Cyber Essentials Plus compliance mapping!  
-**NEW in v2.0**: Enhanced with subscription and resource group enumeration, multi-tenant support, progress tracking, and accurate compliance data matching Azure Portal values!
-
+**NEW in v3.0**: Simplified CLI (`-Output`, `-CEP`), real policy metadata, CE+ v3.2 test specification (TC1–TC5), Quick Assess mode, delta/trending!  
 **IMPORTANT**: This script is specifically designed for and optimized for **Azure Landing Zone (ALZ) management group structures**. All recommendations and gap analysis are based on the standard ALZ architecture. The script will work with any management group hierarchy, but the policy recommendations are most meaningful when applied to an ALZ-compliant structure.
 
 ### Azure Landing Zone Management Group Structure
@@ -223,25 +228,25 @@ Tenant Root Group
 
 ## What's New
 
-### 🎯 v2.2: Cyber Essentials Plus Compliance Mapping
+### 🚀 v3.0: Major Release — Complete Interface Overhaul
 
-**Experimental Feature**: Map UK Cyber Essentials Plus (CE+) requirements to Azure Policy assignments!
+- 🔧 **Scoring Accuracy**: Parameterised initiatives (Defender, ASC Default, Sentinel) now correctly scored using category + name keyword inference
+- 🔄 **Automatic Update Check**: Script checks GitHub for newer versions at startup and shows new capabilities
+- ⬇️ **Self-Update**: `-Update` switch downloads the latest version from GitHub, validates it, backs up the current script, and replaces it in place — no Azure login required
+- �📊 **Enhanced Legends**: Cost & Security legends with real-world cost examples, scoring methodology panels, updated glossary formulas
+- 📋 **Policy Exemptions**: Queries all exemptions from ARG, shows scope/category/expiry, integrated into Engineering Report
+- 🗃️ **YAML Database Export**: `-Output YAML` exports full assessment snapshot for offline analysis
+- 📈 **YAML Delta Comparison**: `-DeltaYAML <path>` compares against a previous snapshot — shows changes, drift, and posture trend
+- 🎯 **Simplified CLI**: `-Output CSV,HTML` and `-CEP Full` replace 6+ legacy switches
+- 📊 **Real policy metadata**: Batch ARG query resolves actual policy definitions — no more regex guessing
+- 🔍 **All scopes by default**: MG + Subscriptions + RGs assessed automatically
+- ⚡ **Quick Assess**: One-page executive summary with `-QuickAssess`
+- 🇬🇧 **CE+ v3.2 Tests**: 5 test cases (TC1–TC5) aligned to [NCSC specification](https://www.ncsc.gov.uk/files/cyber-essentials-plus-test-specification-v3-2.pdf)
+- ⚖️ **Control Type Balance**: Suggested ranges with honest attribution
+- ⚠️ **Enhanced Anti-Patterns**: Expandable cards with granular detail and Microsoft docs references
+- 👤 **Attribution**: Project credited to Riccardo Pomato
 
-- 🇬🇧 CE+ compliance gap analysis
-- 📊 Automated mapping of 24 CE+ requirements to Azure policies
-- 📄 CSV export for compliance reporting (`-ExportCEPCompliance`)
-- ⚠️ **Experimental** - Policy mappings are approximate ([Read More](CYBER-ESSENTIALS-PLUS.md))
-
-### 🚀 v2.1: Azure Resource Graph Performance Boost
-
-**10-50x faster execution!** The script now uses Azure Resource Graph (ARG) for blazing-fast policy queries. What used to take 2-5 minutes now completes in **5-30 seconds**.
-
-- ✅ Single query instead of hundreds of API calls
-- ✅ No subscription context switching required
-- ✅ Simplified code (50% reduction)
-- ✅ All features preserved (compliance, recommendations, export)
-- ✅ Requires `Az.ResourceGraph` module (easy one-time install)
-
+See [WHATS-NEW-v3.0.md](WHATS-NEW-v3.0.md) for full details.
 ## Features
 
 ### Performance (NEW in v2.1)
@@ -252,6 +257,8 @@ Tenant Root Group
 - **Scales to Thousands**: Handles large environments with ease
 
 ### Core Capabilities
+- **Automatic Update Check**: Checks GitHub for newer versions at startup; displays new capabilities when an update is available
+- **Self-Update (`-Update`)**: Downloads the latest script from GitHub, validates it has no parse errors, creates a versioned backup (e.g., `Get-PolicyAssignments-v3.0.0-backup.ps1`), replaces the local script, and exits so you can re-run with the new version. No Azure login required
 - **Multi-Tenant Support**: Select from multiple Azure tenants you have access to
 - **Management Group Discovery**: Automatically discovers all management groups in the selected tenant (including nested hierarchies)
 - **Direct Assignment Filtering**: Shows only policies directly assigned to each management group, excluding inherited policies
@@ -271,8 +278,12 @@ Tenant Root Group
 
 ### Export & Reporting
 - **CSV Export**: Comprehensive policy assignment data
+- **HTML Report**: Interactive report with navigation, Azure Landing Zone coverage analysis, expandable anti-patterns with Microsoft docs references, control type balance with suggested ranges, policy exemptions, and optional delta assessment
+- **YAML Database**: Complete assessment snapshot for offline analysis and delta comparisons
+- **Non-Compliant Export**: Dedicated NC resource export
 - **Custom Filenames**: User-defined or timestamped naming
-- **Comprehensive Details**: All metrics and recommendations included
+- **Quick Assess**: One-page executive summary
+- **Delta/Trending**: YAML snapshot comparison with `-DeltaYAML` for tracking changes across runs
 
 ## Script Logic
 
@@ -317,7 +328,7 @@ if ($assignment.Scope -eq "/providers/Microsoft.Management/managementGroups/$($m
 **Filename options**:
 - **Default**: `PolicyAssignments_YYYYMMDD_HHMMSS.csv` (timestamped)
 - **Custom**: Use `-FileName "YourCustomName.csv"` parameter
-- **CE+ Compliance**: `CyberEssentialsPlus_Compliance_YYYYMMDD_HHMMSS.csv` (when using `-ExportCEPCompliance`)
+- **CE+ Compliance**: `CyberEssentialsPlus_Compliance_YYYYMMDD_HHMMSS.csv` (when using `-CEP Export`)
 
 **Location**: Current directory
 
@@ -326,41 +337,41 @@ if ($assignment.Scope -eq "/providers/Microsoft.Management/managementGroups/$($m
 **Examples**:
 ```powershell
 # Export with default timestamped filename
-.\Get-PolicyAssignments.ps1 -Export
+.\Get-PolicyAssignments.ps1 -Output CSV
 
 # Export with custom filename
-.\Get-PolicyAssignments.ps1 -Export -FileName "Q4-PolicyAudit.csv"
+.\Get-PolicyAssignments.ps1 -Output CSV -FileName "Q4-PolicyAudit.csv"
 
-# Export Cyber Essentials Plus compliance report (NEW in v2.2!)
-.\Get-PolicyAssignments.ps1 -ShowRecommendations -ExportCEPCompliance
+# Export Cyber Essentials Plus compliance report
+.\Get-PolicyAssignments.ps1 -CEP Export
 
 # Export with date-based filename
-.\Get-PolicyAssignments.ps1 -Export -FileName "Policies_$(Get-Date -Format 'yyyy-MM-dd').csv"
+.\Get-PolicyAssignments.ps1 -Output CSV -FileName "Policies_$(Get-Date -Format 'yyyy-MM-dd').csv"
 ```
 
 ### Cyber Essentials Plus Compliance
 
-**NEW in v2.2!** The script can now assess your environment against UK Cyber Essentials Plus (CE+) requirements.
+The script assesses your environment against UK Cyber Essentials Plus (CE+) requirements using the built-in **UK NCSC Cyber Essentials v3.1** Azure Policy Initiative. See the [Azure CE+ Compliance Offering](https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus) for details.
 
-⚠️ **EXPERIMENTAL FEATURE - READ CAREFULLY**  
-- Policy mappings are **approximate** and **NOT 100% accurate**
+⚠️ **EXPERIMENTAL FEATURE**  
 - This tool does **NOT provide official CE+ certification**
-- Use for **guidance only** - not for compliance attestation
-- Community feedback welcome to improve mappings
+- Use for **guidance only** — not for compliance attestation
 - See [CYBER-ESSENTIALS-PLUS.md](CYBER-ESSENTIALS-PLUS.md) for full limitations
 
 **Usage**:
 ```powershell
 # Console output only
-.\Get-PolicyAssignments.ps1 -ShowRecommendations
+.\Get-PolicyAssignments.ps1 -CEP Show
+
+# Run CE+ v3.2 test cases (TC1–TC5)
+.\Get-PolicyAssignments.ps1 -CEP Test
 
 # Export CE+ compliance to CSV
-.\Get-PolicyAssignments.ps1 -ShowRecommendations -ExportCEPCompliance
-```
+.\Get-PolicyAssignments.ps1 -CEP Export
 
-**Output**:
-- Console: CE+ compliance section with deployed/missing controls and compliance score
-- CSV: Detailed report with recommendations for each CE+ requirement
+# Full CE+ assessment
+.\Get-PolicyAssignments.ps1 -CEP Full
+```
 
 **See also**: [Cyber Essentials Plus Documentation](CYBER-ESSENTIALS-PLUS.md)
 
@@ -430,7 +441,7 @@ Review the console output to identify where policies are actually assigned.
 
 ## Limitations
 
-- **Scope**: By default, shows policies assigned to management groups. Use `-IncludeSubscriptions` and `-IncludeResourceGroups` assignment scopes if needed.
+- **Scope**: All scopes (Management Groups, Subscriptions, Resource Groups) are assessed by default. Use `-ManagementGroup` or `-Subscription` to filter.
 - **Permissions**: Requires appropriate Azure permissions (Reader) on queried scopes. ARG queries respect RBAC automatically.
 - **ALZ Context**: Policy recommendations and gap analysis are based on **Azure Landing Zone structure** - results are most meaningful in ALZ-compliant environments.
 - **Connectivity**: Azure Landing Zone validation requires internet connectivity to fetch latest policies from the official [Azure Landing Zones Library](https://github.com/Azure/Azure-Landing-Zones-Library) (falls back to cached list if offline).
@@ -439,8 +450,9 @@ Review the console output to identify where policies are actually assigned.
 
 ## Version History
 
+- **v3.0.0**: Major release — simplified CLI, real policy metadata, CE+ v3.2 tests, Quick Assess, YAML delta/trending, exemptions, Landing Zone Analysis in HTML report, enhanced anti-patterns, control type balance, scoring accuracy fixes, updated attribution. See [WHATS-NEW-v3.0.md](WHATS-NEW-v3.0.md).
 - **v2.2.0**: Cyber Essentials Plus compliance mapping, `-ExportCEPCompliance` parameter, disclaimers. See [WHATS-NEW-v2.2.md](WHATS-NEW-v2.2.md).
-- **v2.1.0**: Major Resource Graph (ARG) integration for 10-50x performance boost, unified compliance queries, and ALZ library integration fix.
+- **v2.1.0**: Major Resource Graph (ARG) integration for 10-50x performance boost.
 - **v2.0.1**: Enhanced summary statistics and detailed breakdowns.
 - **v2.0.0**: Added subscription/RG enumeration, multi-tenant support, and impact analysis.
 - **v1.0.0**: Initial release with multi-tenant support and inherited policy filtering.
@@ -448,8 +460,8 @@ Review the console output to identify where policies are actually assigned.
 ## References
 
 - [Azure Landing Zones Library](https://github.com/Azure/Azure-Landing-Zones-Library) - Official ALZ policy definitions
-- [Azure Policy Overview](https://docs.microsoft.com/en-us/azure/governance/policy/overview)
-- [Management Groups](https://docs.microsoft.com/en-us/azure/governance/management-groups/overview)
+- [Azure Policy Overview](https://learn.microsoft.com/en-us/azure/governance/policy/overview)
+- [Management Groups](https://learn.microsoft.com/en-us/azure/governance/management-groups/overview)
 
 ## License
 

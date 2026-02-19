@@ -355,7 +355,7 @@ We welcome feedback on policy mappings! See [CYBER-ESSENTIALS-PLUS.md](CYBER-ESS
 - [Azure Security Baseline](https://learn.microsoft.com/en-us/security/benchmark/azure/)
 
 ### Related Tools
-- [Azure Landing Zone Policies](https://github.com/Azure/Enterprise-Scale/wiki/ALZ-Policies)
+- [Azure Landing Zone Policies](https://github.com/Azure/Azure-Landing-Zones-Library)
 - [Microsoft Defender for Cloud](https://learn.microsoft.com/en-us/azure/defender-for-cloud/)
 - [Azure Update Manager](https://learn.microsoft.com/en-us/azure/update-manager/)
 

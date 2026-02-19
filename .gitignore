@@ -1,5 +1,7 @@
-# CSV export files
+# export files
 *.csv
+*.yaml
+*.html
 
 # PowerShell module cache
 PSGetModuleInfo.xml
