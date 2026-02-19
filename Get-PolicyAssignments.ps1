@@ -140,7 +140,7 @@
     Exports YAML database and shows detailed delta against a previous assessment.
 
 .NOTES
-    Version: 3.0.0
+    Version: 3.0.1
     Last Updated: February 19, 2026
     Author: Riccardo Pomato
     
@@ -156,6 +156,7 @@
     - Azure CE+ Compliance Offering    : https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus
     
     Version History:
+    - 3.0.1 (2026-02-19): Performance optimisation — replaced O(n²) array += with List<T>.Add().
     - 3.0.0 (2026-02-19): Major release — see WHATS-NEW-v3.0.md for full details.
                           • Automatic update check: fetches VERSION.json from GitHub at startup
                             to detect newer releases and show highlights (non-blocking, 5s timeout).
@@ -231,7 +232,7 @@ param(
 )
 
 # Script Version
-$ScriptVersion = "3.0.0"
+$ScriptVersion = "3.0.1"
 $ScriptLastUpdated = "2026-02-19"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -256,11 +257,19 @@ function Test-ScriptUpdate {
         $currentVersion = [version]$ScriptVersion
 
         if ($remoteVersion -gt $currentVersion) {
+            # Collect history entries newer than the running version
+            $newEntries = @()
+            if ($response.history) {
+                $newEntries = @($response.history | Where-Object {
+                    [version]$_.version -gt $currentVersion
+                } | Sort-Object { [version]$_.version } -Descending)
+            }
+
             return @{
                 CurrentVersion  = $ScriptVersion
                 LatestVersion   = $response.version
                 ReleaseDate     = $response.releaseDate
-                Highlights      = $response.highlights
+                History         = $newEntries
                 ReleaseNotesUrl = $response.releaseNotesUrl
                 ScriptUrl       = $response.scriptUrl
             }
@@ -276,7 +285,8 @@ function Test-ScriptUpdate {
 function Show-UpdateNotification {
     <#
     .SYNOPSIS
-        Displays a prominent update banner if a newer version is available.
+        Displays a prominent update banner if a newer version is available,
+        listing all changes since the user's current version grouped by release.
     #>
     param([hashtable]$UpdateInfo)
     if (-not $UpdateInfo) { return }
@@ -295,18 +305,33 @@ function Show-UpdateNotification {
     Write-BoxLine "UPDATE AVAILABLE: v$($UpdateInfo.CurrentVersion) → v$($UpdateInfo.LatestVersion) (released $($UpdateInfo.ReleaseDate))" 'Yellow'
     Write-Host "  ╠══════════════════════════════════════════════════════════════════════════╣" -ForegroundColor Yellow
 
-    # Show up to 5 highlights
-    $maxHighlights = [Math]::Min(5, $UpdateInfo.Highlights.Count)
-    for ($i = 0; $i -lt $maxHighlights; $i++) {
-        Write-BoxLine "• $($UpdateInfo.Highlights[$i])" 'Cyan'
-    }
-    if ($UpdateInfo.Highlights.Count -gt 5) {
-        Write-BoxLine "  ...and $($UpdateInfo.Highlights.Count - 5) more improvements" 'DarkCyan'
+    # Show changes grouped by version (history entries are already filtered & sorted)
+    if ($UpdateInfo.History -and $UpdateInfo.History.Count -gt 0) {
+        $maxVersions = [Math]::Min(5, $UpdateInfo.History.Count)
+        for ($v = 0; $v -lt $maxVersions; $v++) {
+            $entry = $UpdateInfo.History[$v]
+            if ($v -gt 0) {
+                Write-Host "  ╠──────────────────────────────────────────────────────────────────────────╣" -ForegroundColor DarkGray
+            }
+            Write-BoxLine "v$($entry.version) — $($entry.releaseDate)" 'White'
+
+            $maxHighlights = [Math]::Min(5, $entry.highlights.Count)
+            for ($i = 0; $i -lt $maxHighlights; $i++) {
+                Write-BoxLine "  • $($entry.highlights[$i])" 'Cyan'
+            }
+            if ($entry.highlights.Count -gt 5) {
+                Write-BoxLine "    ...and $($entry.highlights.Count - 5) more changes" 'DarkCyan'
+            }
+        }
+        if ($UpdateInfo.History.Count -gt 5) {
+            Write-Host "  ╠──────────────────────────────────────────────────────────────────────────╣" -ForegroundColor DarkGray
+            Write-BoxLine "...and $($UpdateInfo.History.Count - 5) more version(s) — see full changelog" 'DarkCyan'
+        }
     }
 
     Write-Host "  ╠══════════════════════════════════════════════════════════════════════════╣" -ForegroundColor Yellow
     Write-BoxLine "Run with -Update to upgrade automatically" 'Green'
-    Write-BoxLine "Release notes: $($UpdateInfo.ReleaseNotesUrl)" 'Gray'
+    Write-BoxLine "Full changelog: $($UpdateInfo.ReleaseNotesUrl)" 'Gray'
     Write-Host "  ╚══════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
     Write-Host ""
 }
@@ -349,6 +374,25 @@ function Update-ScriptFromRepo {
 
     Write-Host "  New version found: v$($versionInfo.version) (released $($versionInfo.releaseDate))" -ForegroundColor Yellow
     Write-Host ""
+
+    # Show what's changed since the current version
+    if ($versionInfo.history) {
+        $newEntries = @($versionInfo.history | Where-Object {
+            [version]$_.version -gt $currentVersion
+        } | Sort-Object { [version]$_.version } -Descending)
+
+        if ($newEntries.Count -gt 0) {
+            Write-Host "  What's new since v$ScriptVersion :" -ForegroundColor Cyan
+            Write-Host ""
+            foreach ($entry in $newEntries) {
+                Write-Host "    v$($entry.version) — $($entry.releaseDate)" -ForegroundColor White
+                foreach ($h in $entry.highlights) {
+                    Write-Host "      • $h" -ForegroundColor Gray
+                }
+                Write-Host ""
+            }
+        }
+    }
 
     # 2. Check scriptUrl
     $scriptUrl = $versionInfo.scriptUrl
@@ -2874,7 +2918,6 @@ $(if ($yd.NewAssignments.Count -eq 0 -and $yd.RemovedAssignments.Count -eq 0 -an
             $regTotal = [int]$_.'Total Resources'
             $regScope = $_.'Scope Name'
             $regEnforce = $_.'Enforcement Mode'
-            $regEffect = $_.'Effect Type'
             $regStatusBadge = if ($regEnforce -eq 'DoNotEnforce') { "<span class='badge status-warn'>Audit Only</span>" } elseif ($regNC -gt 0) { "<span class='badge status-fail'>Non-Compliant</span>" } else { "<span class='badge status-pass'>Compliant</span>" }
             $regNCText = if ($regNC -gt 0) { "<span class='nc-bad'>$regNC non-compliant</span> resources" } else { '<span style="color:var(--green)">All resources compliant</span>' }
             # Calculate compliance score from total/NC resources
@@ -2891,8 +2934,6 @@ $(if ($yd.NewAssignments.Count -eq 0 -and $yd.RemovedAssignments.Count -eq 0 -an
         }
     }
     # Inferred framework coverage — only show if NOT already assigned as a regulatory initiative
-    $regNamesJoined = ($assignedRegNames | ForEach-Object { $_.ToLower() }) -join '|'
-
     # Helper: check if any assigned regulatory initiative name matches a pattern
     function Test-FrameworkAssigned {
         param([string]$Pattern)
@@ -5561,8 +5602,8 @@ try {
 
 Write-Host "" # Blank line
 
-# Create array to store results
-$results = @()
+# Create list to store results (List<T> for O(1) append vs array += O(n) copy)
+$results = [System.Collections.Generic.List[object]]::new()
 
 Write-Host "`nQuerying Azure Resource Graph for policy assignments..." -ForegroundColor Cyan
 Write-Host "(Using Azure Resource Graph for optimal performance)" -ForegroundColor DarkGray
@@ -5622,8 +5663,8 @@ try {
     if ($argResults.Count -eq 1000) {
         Write-Host "  Warning: Result limit reached (1000). Using pagination..." -ForegroundColor Yellow
         # If we hit the limit, we need to page through results
-        $allArgResults = @()
-        $allArgResults += $argResults
+        $allArgResults = [System.Collections.Generic.List[object]]::new(1024)
+        $allArgResults.AddRange(@($argResults))
         $skipToken = $argResults.SkipToken
         $pageCount = 1
         
@@ -5631,11 +5672,11 @@ try {
             $pageCount++
             Write-Progress -Activity "Querying Azure Resource Graph" -Status "Retrieving page $pageCount (total: $($allArgResults.Count) assignments)..." -PercentComplete ([math]::Min(25 + ($pageCount * 10), 90)) -Id 10
             $moreResults = Search-AzGraph -Query $policyQuery -First 1000 -SkipToken $skipToken -UseTenantScope
-            $allArgResults += $moreResults
+            $allArgResults.AddRange(@($moreResults))
             $skipToken = $moreResults.SkipToken
             Write-Host "  Retrieved $($allArgResults.Count) assignments..." -ForegroundColor Gray
         }
-        $argResults = $allArgResults
+        $argResults = $allArgResults.ToArray()
     }
     
     Write-Progress -Activity "Querying Azure Resource Graph" -Status "Completed" -PercentComplete 100 -Id 10
@@ -5675,8 +5716,8 @@ try {
     if ($complianceResults) {
         # Handle pagination if needed
         if ($complianceResults.Count -eq 1000) {
-            $allComplianceResults = @()
-            $allComplianceResults += $complianceResults
+            $allComplianceResults = [System.Collections.Generic.List[object]]::new(1024)
+            $allComplianceResults.AddRange(@($complianceResults))
             $skipToken = $complianceResults.SkipToken
             $pageCount = 1
             
@@ -5684,10 +5725,10 @@ try {
                 $pageCount++
                 Write-Progress -Activity "Querying Compliance Data" -Status "Retrieving page $pageCount..." -PercentComplete ([math]::Min(25 + ($pageCount * 10), 70)) -Id 11
                 $moreResults = Search-AzGraph -Query $complianceQuery -First 1000 -SkipToken $skipToken -UseTenantScope
-                $allComplianceResults += $moreResults
+                $allComplianceResults.AddRange(@($moreResults))
                 $skipToken = $moreResults.SkipToken
             }
-            $complianceResults = $allComplianceResults
+            $complianceResults = $allComplianceResults.ToArray()
         }
         
         Write-Progress -Activity "Querying Compliance Data" -Status "Processing results..." -PercentComplete 75 -Id 11
@@ -5770,7 +5811,7 @@ $exemptionScopeFilter
 | order by scopeType asc, exemptionName asc
 "@
 
-$exemptionData = @()
+$exemptionData = [System.Collections.Generic.List[object]]::new()
 $exemptionLookup = @{}  # keyed by policyAssignmentId (lowercase) → array of exemptions
 try {
     Write-Progress -Activity "Querying Policy Exemptions" -Status "Retrieving exemptions..." -PercentComplete 0 -Id 14
@@ -5780,18 +5821,18 @@ try {
     if ($exemptionResults -and $exemptionResults.Count -gt 0) {
         # Handle pagination
         if ($exemptionResults.Count -eq 1000) {
-            $allExemptionResults = @()
-            $allExemptionResults += $exemptionResults
+            $allExemptionResults = [System.Collections.Generic.List[object]]::new(1024)
+            $allExemptionResults.AddRange(@($exemptionResults))
             $skipToken = $exemptionResults.SkipToken
             $pageCount = 1
             while ($skipToken) {
                 $pageCount++
                 Write-Progress -Activity "Querying Policy Exemptions" -Status "Retrieving page $pageCount..." -PercentComplete ([math]::Min(25 + ($pageCount * 10), 90)) -Id 14
                 $moreResults = Search-AzGraph -Query $exemptionQuery -First 1000 -SkipToken $skipToken -UseTenantScope
-                $allExemptionResults += $moreResults
+                $allExemptionResults.AddRange(@($moreResults))
                 $skipToken = $moreResults.SkipToken
             }
-            $exemptionResults = $allExemptionResults
+            $exemptionResults = $allExemptionResults.ToArray()
         }
 
         # Process exemption results
@@ -5846,7 +5887,7 @@ try {
                 'Exempted Policies'     = $refIdCount
                 'Exemption ID'          = $ex.exemptionId
             }
-            $exemptionData += $exObj
+            [void]$exemptionData.Add($exObj)
 
             # Build lookup by assignment ID
             $aIdLower = $ex.policyAssignmentId
@@ -5929,16 +5970,16 @@ policyresources
     policyType = tostring(properties.policyType)
 "@
 
-    $policyDefResults = @()
+    $policyDefResults = [System.Collections.Generic.List[object]]::new(1024)
     $policyDefPage = Search-AzGraph -Query $policyDefQuery -First 1000 -UseTenantScope
-    $policyDefResults += @($policyDefPage | Expand-AzGraphResult)
+    $policyDefResults.AddRange(@($policyDefPage | Expand-AzGraphResult))
     $defPageCount = 1
 
     while ($policyDefPage.Count -eq 1000 -and $policyDefPage.SkipToken) {
         $defPageCount++
         Write-Progress -Activity "Resolving Policy Definitions" -Status "Retrieving page $defPageCount ($($policyDefResults.Count) definitions)..." -PercentComplete ([math]::Min($defPageCount * 15, 70)) -Id 13
         $policyDefPage = Search-AzGraph -Query $policyDefQuery -First 1000 -SkipToken $policyDefPage.SkipToken -UseTenantScope
-        $policyDefResults += @($policyDefPage | Expand-AzGraphResult)
+        $policyDefResults.AddRange(@($policyDefPage | Expand-AzGraphResult))
     }
 
     foreach ($def in $policyDefResults) {
@@ -5965,13 +6006,13 @@ policyresources
     policyDefinitions = properties.policyDefinitions
 "@
 
-    $initDefResults = @()
+    $initDefResults = [System.Collections.Generic.List[object]]::new(256)
     $initDefPage = Search-AzGraph -Query $initDefQuery -First 1000 -UseTenantScope
-    $initDefResults += @($initDefPage | Expand-AzGraphResult)
+    $initDefResults.AddRange(@($initDefPage | Expand-AzGraphResult))
 
     while ($initDefPage.Count -eq 1000 -and $initDefPage.SkipToken) {
         $initDefPage = Search-AzGraph -Query $initDefQuery -First 1000 -SkipToken $initDefPage.SkipToken -UseTenantScope
-        $initDefResults += @($initDefPage | Expand-AzGraphResult)
+        $initDefResults.AddRange(@($initDefPage | Expand-AzGraphResult))
     }
 
     foreach ($iDef in $initDefResults) {
@@ -6252,7 +6293,7 @@ foreach ($assignment in $argResults) {
         'Scope'               = $assignment.scope
     }
     
-    $results += $policyResult
+    [void]$results.Add($policyResult)
 }
 
 Write-Progress -Activity "Processing Policy Assignments" -Completed -Id 1
@@ -6495,9 +6536,9 @@ $recommendedALZPolicies = Get-ALZRecommendedPolicies -ALZVersion "main"
 Write-Host "`nAzure Landing Zone Policy Coverage Analysis:" -ForegroundColor Yellow
 Write-Host "(Based on official Azure Landing Zone Bicep repository)" -ForegroundColor Gray
 
-$missingCriticalPolicies = @()
-$doNotEnforceALZPolicies = @()
-$matchedALZPolicies = @()
+$missingCriticalPolicies = [System.Collections.Generic.List[object]]::new()
+$doNotEnforceALZPolicies = [System.Collections.Generic.List[object]]::new()
+$matchedALZPolicies = [System.Collections.Generic.List[object]]::new()
 $assignedPoliciesWithEnforcement = $results | Select-Object 'Assignment Name', 'Policy Name', 'Display Name', 'Enforcement Mode'
 
 foreach ($category in $recommendedALZPolicies.Keys) {
@@ -6517,24 +6558,24 @@ foreach ($category in $recommendedALZPolicies.Keys) {
             $doNotEnforceMatch = $matchingPolicies | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' }
             if ($doNotEnforceMatch) {
                 Write-Host "    ⚠️  $policy (DoNotEnforce)" -ForegroundColor Yellow
-                $doNotEnforceALZPolicies += [PSCustomObject]@{
+                [void]$doNotEnforceALZPolicies.Add([PSCustomObject]@{
                     Category = $category
                     PolicyName = $policy
                     ActualName = $doNotEnforceMatch[0].'Policy Name'
-                }
+                })
             } else {
                 Write-Host "    ✓ $policy" -ForegroundColor Green
-                $matchedALZPolicies += [PSCustomObject]@{
+                [void]$matchedALZPolicies.Add([PSCustomObject]@{
                     Category = $category
                     PolicyName = $policy
-                }
+                })
             }
         } else {
             Write-Host "    ✗ $policy (MISSING)" -ForegroundColor Red
-            $missingCriticalPolicies += [PSCustomObject]@{
+            [void]$missingCriticalPolicies.Add([PSCustomObject]@{
                 Category = $category
                 PolicyPattern = $policy
-            }
+            })
         }
     }
 }
@@ -6712,7 +6753,7 @@ if ($ShowCEPCompliance) {
     Write-Host ""
 
     # Data structures for export
-    $cepExportData = @()
+    $cepExportData = [System.Collections.Generic.List[object]]::new()
 
     # ── Step 1: Find the CE v3.1 initiative ──
     Write-Progress -Activity "CE Compliance" -Status "Searching for CE v3.1 initiative..." -PercentComplete 5 -Id 30
@@ -6840,7 +6881,7 @@ policyresources
             }
 
             $matchedCEPolicies = @{}
-            $matchedCEAssignments = @()
+            $matchedCEAssignments = [System.Collections.Generic.List[object]]::new()
             foreach ($assignment in $argResults) {
                 if ($assignment.policyType -eq 'Initiative') { continue }
                 $assignedDefId = $assignment.policyDefinitionId
@@ -6859,7 +6900,7 @@ policyresources
                         EnforcementMode = $assignment.enforcementMode; Scope = $assignment.scope
                         ScopeType = $assignment.scopeType; AssignmentId = $assignment.assignmentId
                     })
-                    $matchedCEAssignments += $assignment
+                    [void]$matchedCEAssignments.Add($assignment)
                 }
             }
 
@@ -6877,12 +6918,12 @@ policyresources
             $policyDefDisplayNames = @{}
             $allGuidsToResolve = @($ceRefIdToDefGuid.Values | Select-Object -Unique)
             Write-Host "   Resolving $($allGuidsToResolve.Count) policy display names..." -ForegroundColor Gray
-            $unresolvedGuids = @()
+            $unresolvedGuids = [System.Collections.Generic.List[string]]::new()
             foreach ($guid in $allGuidsToResolve) {
                 if ($policyDefMetadata.ContainsKey($guid) -and $policyDefMetadata[$guid].DisplayName) {
                     $policyDefDisplayNames[$guid] = $policyDefMetadata[$guid].DisplayName
                 } else {
-                    $unresolvedGuids += $guid
+                    [void]$unresolvedGuids.Add($guid)
                 }
             }
             # Fallback: resolve any remaining via individual API calls
@@ -6997,24 +7038,24 @@ policyresources
                             $c  = if ($ceIndividualComplianceData.ContainsKey($aidLower)) { $ceIndividualComplianceData[$aidLower].CompliantCount } else { 'N/A' }
                             $ex = if ($ceIndividualComplianceData.ContainsKey($aidLower)) { $ceIndividualComplianceData[$aidLower].ExemptCount } else { 'N/A' }
                             $t  = if ($ceIndividualComplianceData.ContainsKey($aidLower)) { $ceIndividualComplianceData[$aidLower].TotalResources } else { 'N/A' }
-                            $cepExportData += [PSCustomObject]@{
+                            [void]$cepExportData.Add([PSCustomObject]@{
                                 'CE Control Group' = $gDisplay; 'Policy Reference' = $gp.RefId
                                 'Policy Display Name' = $displayName; 'Status' = $status
                                 'Non-Compliant Resources' = $nc; 'Compliant Resources' = $c
                                 'Exempt Resources' = $ex; 'Total Resources' = $t
                                 'Recommendation' = if ($firstAssignment.EnforcementMode -eq 'DoNotEnforce') { 'Enable enforcement' } elseif ($compInfo) { 'Remediate non-compliant resources' } else { 'Monitor compliance' }
-                            }
+                            })
                         } else {
                             Write-Host "   │  ✗ $displayName (NOT ASSIGNED)" -ForegroundColor Red
                             $groupMissing++
                             [void]$uniqueMissingGuids.Add($gp.DefGuid)
-                            $cepExportData += [PSCustomObject]@{
+                            [void]$cepExportData.Add([PSCustomObject]@{
                                 'CE Control Group' = $gDisplay; 'Policy Reference' = $gp.RefId
                                 'Policy Display Name' = $displayName; 'Status' = 'Not Assigned'
                                 'Non-Compliant Resources' = 'N/A'; 'Compliant Resources' = 'N/A'
                                 'Exempt Resources' = 'N/A'; 'Total Resources' = 'N/A'
                                 'Recommendation' = 'Assign this policy or assign the full CE initiative'
-                            }
+                            })
                         }
                     }
 
@@ -7103,12 +7144,12 @@ policyresources
             $allGuids = @($ceRefIdToDefGuid.Values | Select-Object -Unique)
             Write-Host "   Resolving $($allGuids.Count) policy display names..." -ForegroundColor Gray
             $policyDefDisplayNames = @{}
-            $unresolvedGuids = @()
+            $unresolvedGuids = [System.Collections.Generic.List[string]]::new()
             foreach ($guid in $allGuids) {
                 if ($policyDefMetadata.ContainsKey($guid) -and $policyDefMetadata[$guid].DisplayName) {
                     $policyDefDisplayNames[$guid] = $policyDefMetadata[$guid].DisplayName
                 } else {
-                    $unresolvedGuids += $guid
+                    [void]$unresolvedGuids.Add($guid)
                 }
             }
             if ($unresolvedGuids.Count -gt 0) {
@@ -7194,7 +7235,7 @@ policyresources
                             $state = 'Compliant'
                         }
 
-                        $cepExportData += [PSCustomObject]@{
+                        [void]$cepExportData.Add([PSCustomObject]@{
                             'CE Control Group'          = $gDisplay
                             'Policy Reference'          = $gp.RefId
                             'Policy Display Name'       = $name
@@ -7204,7 +7245,7 @@ policyresources
                             'Exempt Resources'          = $ex
                             'Total Resources'           = $total
                             'Recommendation'            = if ($nc -gt 0) { 'Remediate non-compliant resources' } else { 'Monitor compliance' }
-                        }
+                        })
                     } else {
                         # No ARG data — if evaluation has run, treat as compliant with 0 applicable resources
                         if ($ceComplianceResults.Count -gt 0) {
@@ -7217,7 +7258,7 @@ policyresources
                             $state = 'Not Evaluated'
                         }
 
-                        $cepExportData += [PSCustomObject]@{
+                        [void]$cepExportData.Add([PSCustomObject]@{
                             'CE Control Group'          = $gDisplay
                             'Policy Reference'          = $gp.RefId
                             'Policy Display Name'       = $name
@@ -7227,7 +7268,7 @@ policyresources
                             'Exempt Resources'          = 0
                             'Total Resources'           = 0
                             'Recommendation'            = if ($state -eq 'Not Evaluated') { 'Wait for policy evaluation or trigger a compliance scan' } else { 'No applicable resources — monitor for new deployments' }
-                        }
+                        })
                     }
                 }
 
@@ -7365,10 +7406,10 @@ $ncScopeFilter
     complianceState
 "@
 
-    $ncResults = @()
+    $ncResults = [System.Collections.Generic.List[object]]::new(1024)
     try {
         $ncRaw = @(Search-AzGraph -Query $ncQuery -First 1000 -UseTenantScope | Expand-AzGraphResult)
-        $ncResults += $ncRaw
+        $ncResults.AddRange($ncRaw)
 
         # Paginate if needed
         if ($ncRaw.Count -eq 1000) {
@@ -7380,7 +7421,7 @@ $ncScopeFilter
                 Write-Progress -Activity "Exporting Non-Compliant Resources" -Status "Retrieving page $ncPageCount ($($ncResults.Count) entries so far)..." -PercentComplete ([math]::Min(10 + ($ncPageCount * 5), 35)) -Id 15
                 $morePage = Search-AzGraph -Query $ncQuery -First 1000 -SkipToken $skipToken -UseTenantScope
                 $pageRows = @($morePage | Expand-AzGraphResult)
-                $ncResults += $pageRows
+                $ncResults.AddRange($pageRows)
                 $skipToken = $morePage.SkipToken
                 Write-Host "  Retrieved $($ncResults.Count) non-compliant resource entries..." -ForegroundColor Gray
             }
@@ -7396,13 +7437,13 @@ $ncScopeFilter
         # Resolve unique policy definition GUIDs to display names — use batch cache first
         $ncPolicyGuids = @($ncResults | ForEach-Object { $_.policyDefinitionName } | Select-Object -Unique)
         $ncDisplayNames = @{}
-        $ncUnresolved = @()
+        $ncUnresolved = [System.Collections.Generic.List[string]]::new()
         foreach ($guid in $ncPolicyGuids) {
             $gLower = "$guid".ToLower()
             if ($policyDefMetadata.ContainsKey($gLower) -and $policyDefMetadata[$gLower].DisplayName) {
                 $ncDisplayNames[$guid] = $policyDefMetadata[$gLower].DisplayName
             } else {
-                $ncUnresolved += $guid
+                [void]$ncUnresolved.Add($guid)
             }
         }
         if ($ncUnresolved.Count -gt 0) {
@@ -7424,13 +7465,13 @@ $ncScopeFilter
             if ($_.policySetDefinitionId -match '/([^/]+)$') { $Matches[1] }
         } | Where-Object { $_ } | Select-Object -Unique)
         $ncSetDisplayNames = @{}
-        $ncSetUnresolved = @()
+        $ncSetUnresolved = [System.Collections.Generic.List[string]]::new()
         foreach ($sGuid in $ncSetGuids) {
             $sLower = "$sGuid".ToLower()
             if ($initDefMetadata.ContainsKey($sLower) -and $initDefMetadata[$sLower].DisplayName) {
                 $ncSetDisplayNames[$sGuid] = $initDefMetadata[$sLower].DisplayName
             } else {
-                $ncSetUnresolved += $sGuid
+                [void]$ncSetUnresolved.Add($sGuid)
             }
         }
         if ($ncSetUnresolved.Count -gt 0) {
@@ -7450,13 +7491,13 @@ $ncScopeFilter
         Write-Progress -Activity "Exporting Non-Compliant Resources" -Status "Building export data..." -PercentComplete 96 -Id 15
 
         # Build export rows
-        $ncExportData = @()
+        $ncExportData = [System.Collections.Generic.List[object]]::new($ncResults.Count)
         foreach ($nc in $ncResults) {
             $policyDisplayName = if ($ncDisplayNames[$nc.policyDefinitionName]) { $ncDisplayNames[$nc.policyDefinitionName] } else { $nc.policyDefinitionName }
             $setGuid = if ($nc.policySetDefinitionId -match '/([^/]+)$') { $Matches[1] } else { '' }
             $initiativeDisplayName = if ($setGuid -and $ncSetDisplayNames[$setGuid]) { $ncSetDisplayNames[$setGuid] } elseif ($setGuid) { $setGuid } else { 'N/A (individual policy)' }
 
-            $ncExportData += [PSCustomObject]@{
+            [void]$ncExportData.Add([PSCustomObject]@{
                 'Resource ID'            = $nc.resourceId
                 'Resource Name'          = $nc.resourceName
                 'Resource Type'          = $nc.resourceType
@@ -7467,7 +7508,7 @@ $ncScopeFilter
                 'Initiative Name'        = $initiativeDisplayName
                 'Policy Assignment Name' = $nc.policyAssignmentName
                 'Policy Assignment ID'   = $nc.policyAssignmentId
-            }
+            })
         }
 
         $ncTimestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -7558,7 +7599,7 @@ $ncHtmlFilter
           policyDefinitionName, policySetDefinitionName, resourceType, resourceGroup, subscriptionId
 "@
 
-        $ncExportData = @()
+        $ncExportData = [System.Collections.Generic.List[object]]::new(1024)
         try {
             $ncPageResults = Search-AzGraph -Query $ncQuery -First 1000 -UseTenantScope
             $ncPageData = Expand-AzGraphResult $ncPageResults
@@ -7586,7 +7627,7 @@ $ncHtmlFilter
                         $initDefMetadata[$initLower].DisplayName
                     } elseif ($initGuid) { $initGuid } else { 'N/A (individual policy)' }
 
-                    $ncExportData += [PSCustomObject]@{
+                    [void]$ncExportData.Add([PSCustomObject]@{
                         'Resource ID'            = $ncRes.resourceId
                         'Resource Name'          = $resName
                         'Resource Type'          = $ncRes.resourceType
@@ -7597,7 +7638,7 @@ $ncHtmlFilter
                         'Initiative Name'        = $initiativeDisplayName
                         'Policy Assignment Name' = $ncRes.policyAssignmentName
                         'Policy Assignment ID'   = $ncRes.policyAssignmentId
-                    }
+                    })
                 }
 
                 if ($ncPageData.Count -lt 1000) { break }

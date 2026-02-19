@@ -5,6 +5,13 @@ All notable changes to the Azure Policy & Compliance Assessment Tool will be doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-02-19
+
+### ⚡ Performance Optimisation
+
+- **Array append optimisation**: Replaced all `@() += $item` patterns with `[System.Collections.Generic.List[object]]` and `.Add()` / `.AddRange()` calls. This eliminates O(n²) array copy overhead in hot loops (policy assignment processing, ARG pagination, NC resource export, CEP compliance data). Tenants with 1000+ assignments will see meaningful speedup.
+- **Removed unused variables**: Removed `$regEffect` and `$regNamesJoined` (assigned but never referenced).
+
 ## [3.0.0] - 2026-02-18
 
 ### � Major Release — Complete Interface Overhaul & Accuracy Upgrade

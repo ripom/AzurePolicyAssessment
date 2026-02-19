@@ -1,19 +1,87 @@
 {
-  "version": "3.0.0",
+  "version": "3.0.1",
   "releaseDate": "2026-02-19",
   "minimumPowerShellVersion": "7.0",
-  "highlights": [
-    "Simplified CLI: -Output and -CEP parameters replace 6+ legacy switches",
-    "Azure Landing Zone Analysis section in HTML report with ALZ coverage metrics",
-    "Policy exemptions: discovery, HTML report integration, YAML delta tracking",
-    "YAML database export (-Output YAML) and delta comparison (-DeltaYAML)",
-    "Real policy definition metadata via batch ARG query — no more regex guessing",
-    "CE+ v3.2 Test Specification (TC1-TC5) aligned to NCSC specification",
-    "Cost & security scoring accuracy fix for parameterised initiatives",
-    "Enhanced anti-patterns with expandable cards and Microsoft docs references",
-    "Control type balance with suggested ranges and honest WAF attribution",
-    "Quick Assess mode (-QuickAssess) for one-page executive summary"
-  ],
-  "releaseNotesUrl": "https://github.com/ripom/AzurePolicyAssessment/blob/main/WHATS-NEW-v3.0.md",
-  "scriptUrl": "https://raw.githubusercontent.com/ripom/AzurePolicyAssessment/main/Get-PolicyAssignments.ps1"
+  "releaseNotesUrl": "https://github.com/ripom/AzurePolicyAssessment/blob/main/CHANGELOG.md",
+  "scriptUrl": "https://raw.githubusercontent.com/ripom/AzurePolicyAssessment/main/Get-PolicyAssignments.ps1",
+  "history": [
+    {
+      "version": "3.0.1",
+      "releaseDate": "2026-02-19",
+      "highlights": [
+        "Performance: replaced all @() += patterns with List<T> — eliminates O(n²) array copy overhead",
+        "Performance: meaningful speedup for tenants with 1000+ policy assignments",
+        "Code quality: removed unused variables ($regEffect, $regNamesJoined)"
+      ]
+    },
+    {
+      "version": "3.0.0",
+      "releaseDate": "2026-02-18",
+      "highlights": [
+        "Major release: complete interface overhaul & accuracy upgrade",
+        "Simplified CLI: -Output and -CEP parameters replace 6+ legacy switches",
+        "Real policy definition metadata via batch ARG query — no more regex guessing",
+        "Policy exemptions: discovery, HTML report integration, YAML delta tracking",
+        "YAML database export (-Output YAML) and delta comparison (-DeltaYAML)",
+        "CE+ v3.2 Test Specification (TC1-TC5) aligned to NCSC specification",
+        "Azure Landing Zone Analysis section in HTML report",
+        "Cost & security scoring accuracy fix for parameterised initiatives",
+        "Automatic update check and -Update self-update from GitHub",
+        "-ManagementGroup and -Subscription scope filtering",
+        "Quick Assess mode (-QuickAssess) for one-page executive summary"
+      ]
+    },
+    {
+      "version": "2.2.0",
+      "releaseDate": "2026-02-06",
+      "highlights": [
+        "Cyber Essentials Plus compliance mapping (experimental)",
+        "24 policy mappings across 5 CE+ categories",
+        "Automatic CE+ compliance score calculation",
+        "CSV export for CE+ compliance report (-ExportCEPCompliance)",
+        "Gap analysis: deployed vs missing controls with recommendations"
+      ]
+    },
+    {
+      "version": "2.1.0",
+      "releaseDate": "2026-02-05",
+      "highlights": [
+        "Azure Resource Graph integration — 10-50x performance improvement",
+        "Single ARG query replaces iterating through MG/Sub/RG",
+        "Pagination support for large result sets (1000+ assignments)",
+        "Progress bars for ARG queries and processing",
+        "Fixed ALZ policy fetching syntax errors and 404 errors"
+      ]
+    },
+    {
+      "version": "2.0.1",
+      "releaseDate": "2026-02-05",
+      "highlights": [
+        "Optional -TenantId parameter for automation and CI/CD pipelines",
+        "Comprehensive summary statistics (type distribution, scope, effects, enforcement)"
+      ]
+    },
+    {
+      "version": "2.0.0",
+      "releaseDate": "2026-02-05",
+      "highlights": [
+        "Subscription and Resource Group enumeration (-IncludeSubscriptions, -IncludeResourceGroups)",
+        "Multi-tenant support with tenant boundary enforcement",
+        "Fixed compliance data accuracy (non-compliant resources/policies counts)",
+        "Enhanced security posture assessment with ALZ gap analysis",
+        "Progress bars for policy enumeration and CSV export"
+      ]
+    },
+    {
+      "version": "1.0.0",
+      "releaseDate": "2026-02-01",
+      "highlights": [
+        "Initial release: Azure Landing Zone policy assessment",
+        "Policy analysis with effect, enforcement, impact and risk classification",
+        "ALZ gap analysis with dynamic policy recommendations",
+        "CSV export with timestamped naming",
+        "Color-coded console output with summary statistics"
+      ]
+    }
+  ]
 }
