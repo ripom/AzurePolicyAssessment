@@ -140,7 +140,7 @@
     Exports YAML database and shows detailed delta against a previous assessment.
 
 .NOTES
-    Version: 3.0.1
+    Version: 3.0.2
     Last Updated: February 19, 2026
     Author: Riccardo Pomato
     
@@ -156,6 +156,8 @@
     - Azure CE+ Compliance Offering    : https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus
     
     Version History:
+    - 3.0.2 (2026-02-19): Update mechanism — VERSION.json uses history array exclusively;
+                          update banner and -Update flow show cumulative per-version changes.
     - 3.0.1 (2026-02-19): Performance optimisation — replaced O(n²) array += with List<T>.Add().
     - 3.0.0 (2026-02-19): Major release — see WHATS-NEW-v3.0.md for full details.
                           • Automatic update check: fetches VERSION.json from GitHub at startup
@@ -232,7 +234,7 @@ param(
 )
 
 # Script Version
-$ScriptVersion = "3.0.1"
+$ScriptVersion = "3.0.2"
 $ScriptLastUpdated = "2026-02-19"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -463,12 +465,20 @@ function Update-ScriptFromRepo {
     }
 
     # 8. Success
+    $boxW = 68
+    function Write-SuccessLine {
+        param([string]$Text)
+        if ($Text.Length -gt $boxW) { $Text = $Text.Substring(0, $boxW - 1) + '…' }
+        $pad = $boxW - $Text.Length
+        Write-Host "  ║  $Text$(' ' * $pad)  ║" -ForegroundColor Green
+    }
+
     Write-Host ""
     Write-Host "  ╔══════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Green
-    Write-Host "  ║  ✓ UPDATE SUCCESSFUL: v$ScriptVersion → v$($versionInfo.version)                              ║" -ForegroundColor Green
-    Write-Host "  ║                                                                          ║" -ForegroundColor Green
-    Write-Host "  ║  Backup saved as: $(Split-Path $backupPath -Leaf)$(' ' * [Math]::Max(0, 38 - (Split-Path $backupPath -Leaf).Length))║" -ForegroundColor Green
-    Write-Host "  ║  Please re-run the script to use the new version.                        ║" -ForegroundColor Green
+    Write-SuccessLine "✓ UPDATE SUCCESSFUL: v$ScriptVersion → v$($versionInfo.version)"
+    Write-SuccessLine ""
+    Write-SuccessLine "Backup saved as: $(Split-Path $backupPath -Leaf)"
+    Write-SuccessLine "Please re-run the script to use the new version."
     Write-Host "  ╚══════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Green
     Write-Host ""
     exit 0

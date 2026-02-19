@@ -1,10 +1,18 @@
 {
-  "version": "3.0.1",
+  "version": "3.0.2",
   "releaseDate": "2026-02-19",
   "minimumPowerShellVersion": "7.0",
   "releaseNotesUrl": "https://github.com/ripom/AzurePolicyAssessment/blob/main/CHANGELOG.md",
   "scriptUrl": "https://raw.githubusercontent.com/ripom/AzurePolicyAssessment/main/Get-PolicyAssignments.ps1",
   "history": [
+    {
+      "version": "3.0.2",
+      "releaseDate": "2026-02-19",
+      "highlights": [
+        "Update mechanism: VERSION.json uses history array exclusively for cumulative changes",
+        "Update mechanism: grouped per-version display in both startup banner and -Update flow"
+      ]
+    },
     {
       "version": "3.0.1",
       "releaseDate": "2026-02-19",

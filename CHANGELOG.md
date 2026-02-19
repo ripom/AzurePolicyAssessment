@@ -5,6 +5,13 @@ All notable changes to the Azure Policy & Compliance Assessment Tool will be doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.2] - 2026-02-19
+
+### 🔄 Update Mechanism
+
+- **History-only VERSION.json**: Removed deprecated top-level `highlights` field. The `history` array is now the single source of change information for all update flows.
+- **Cumulative per-version display**: Both the startup update banner and `-Update` flow now show all changes since the user's current version, grouped by release — enabling users upgrading across multiple versions to see exactly what changed in each.
+
 ## [3.0.1] - 2026-02-19
 
 ### ⚡ Performance Optimisation
