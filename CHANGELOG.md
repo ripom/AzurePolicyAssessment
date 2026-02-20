@@ -5,6 +5,13 @@ All notable changes to the Azure Policy & Compliance Assessment Tool will be doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-02-20
+
+### 🐛 Bug Fix — N/A Numeric Conversion
+
+#### Fixed
+- **YAML/HTML/console Int32 conversion errors**: Fields such as `Non-Compliant Resources`, `Compliant Resources`, `Exempt Resources`, `Total Resources`, and `Exemptions` could contain `"N/A"` when Azure Resource Graph returns no data for a policy. All `[int]` casts across the YAML database builder, HTML report generator, console output, and remediation plan now validate the value is numeric before casting, defaulting to `0` for non-numeric values. This eliminates the `Cannot convert value "N/A" to type "System.Int32"` errors that occurred during YAML generation and HTML rendering.
+
 ## [3.1.0] - 2026-02-20
 
 ### 🔍 Multi-Assignment Awareness for Cyber Essentials Plus

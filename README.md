@@ -1,6 +1,6 @@
 # Azure Policy Assignments Assessment Script
 
-**Version 3.1.0** | [View Changelog](CHANGELOG.md) | [What's New](WHATS-NEW-v3.0.md)
+**Version 3.1.1** | [View Changelog](CHANGELOG.md) | [What's New](WHATS-NEW-v3.0.md)
 
 > **Author**: This project is made and maintained by **Riccardo Pomato**.
 >
@@ -451,6 +451,7 @@ Review the console output to identify where policies are actually assigned.
 
 ## Version History
 
+- **v3.1.1**: Bug fix — YAML/HTML/console numeric fields now handle "N/A" values gracefully instead of failing with Int32 conversion errors.
 - **v3.1.0**: Multi-assignment Cyber Essentials Plus — automatic detection of initiative assignments at multiple scopes, strictest-state-wins deduplication preventing double-counting, HTML report multi-assignment banner with per-assignment enforcement detail.
 - **v3.0.0**: Major release — simplified CLI, real policy metadata, CE+ v3.2 tests, Quick Assess, YAML delta/trending, exemptions, Landing Zone Analysis in HTML report, enhanced anti-patterns, control type balance, scoring accuracy fixes, updated attribution. See [WHATS-NEW-v3.0.md](WHATS-NEW-v3.0.md).
 - **v2.2.0**: Cyber Essentials Plus compliance mapping, `-ExportCEPCompliance` parameter, disclaimers. See [WHATS-NEW-v2.2.md](WHATS-NEW-v2.2.md).

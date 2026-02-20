@@ -367,6 +367,7 @@ Potential future enhancements:
 
 | Version | Date | Changes |
 |---|---|---|
+| 3.1.1 | 2026-02-20 | Bug fix: numeric fields handle "N/A" values gracefully (Int32 conversion fix) |
 | 3.1.0 | 2026-02-20 | Multi-assignment awareness, strictest-state-wins deduplication, per-scope compliance breakdown, per-scope control group bars, per-scope policy detail and test summary cards |
 | 3.0.0 | 2026-02-19 | Policy exemptions support, Landing Zone Analysis in HTML report, `-CEP` parameter, YAML delta |
 | 3.0.0 | 2026-02-10 | Consolidated into v3.0 — `-CEP` parameter replaces legacy switches, initiative-based compliance, CE+ v3.2 test specification (TC1-TC5) |
@@ -375,6 +376,6 @@ Potential future enhancements:
 ---
 
 **Last Updated**: February 20, 2026  
-**Script Version**: 3.1.0  
+**Script Version**: 3.1.1  
 **Status**: Experimental - Feedback Welcome 🙏  
 **Based on**: [NCSC CE+ v3.2 Test Specification](https://www.ncsc.gov.uk/files/cyber-essentials-plus-test-specification-v3-2.pdf) | [Azure CE+ Compliance Offering](https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus)

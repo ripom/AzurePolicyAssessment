@@ -6,6 +6,12 @@
 
 ---
 
+## v3.1.1 — Bug Fix: N/A Numeric Conversion
+
+Fields such as `Non-Compliant Resources`, `Total Resources`, and `Exemptions` could contain `"N/A"` when Azure Resource Graph returns no data. All `[int]` casts across YAML, HTML, and console output now validate values are numeric before casting, defaulting to `0`. This eliminates the `Cannot convert value "N/A" to type "System.Int32"` errors.
+
+---
+
 ## v3.1.0 — Multi-Assignment Awareness & Per-Scope Compliance Breakdown
 
 ### 🔍 Multi-Assignment Detection & Deduplication

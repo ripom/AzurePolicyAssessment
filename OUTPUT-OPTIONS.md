@@ -1,6 +1,6 @@
 # Output Options - Quick Reference
 
-**Version 3.1.0** | [View Changelog](CHANGELOG.md)
+**Version 3.1.1** | [View Changelog](CHANGELOG.md)
 
 ## 📋 NEW in v3.0: YAML Database, Exemptions & Delta Comparison
 

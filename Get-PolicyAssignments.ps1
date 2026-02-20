@@ -140,7 +140,7 @@
     Exports YAML database and shows detailed delta against a previous assessment.
 
 .NOTES
-    Version: 3.1.0
+    Version: 3.1.1
     Last Updated: February 20, 2026
     Author: Riccardo Pomato
     
@@ -156,6 +156,8 @@
     - Azure CE+ Compliance Offering    : https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus
     
     Version History:
+    - 3.1.1 (2026-02-20): Bug fix — YAML/HTML/console numeric fields now handle "N/A" values
+                          gracefully instead of failing with Int32 conversion errors.
     - 3.1.0 (2026-02-20): CE+ multi-assignment awareness — auto-detects initiative assigned at
                           multiple scopes, strictest-state-wins deduplication, per-scope compliance
                           breakdown in HTML/console/YAML, per-scope control group bars, per-scope
@@ -239,7 +241,7 @@ param(
 )
 
 # Script Version
-$ScriptVersion = "3.1.0"
+$ScriptVersion = "3.1.1"
 $ScriptLastUpdated = "2026-02-20"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -733,7 +735,7 @@ function Export-AssessmentYAML {
 
     # Category breakdown
     $PolicyResults | Where-Object { $_.'Category' -and $_.'Category' -ne '' } | Group-Object 'Category' | Sort-Object Count -Descending | ForEach-Object {
-        $catNC = ($_.Group | ForEach-Object { [int]$_.'Non-Compliant Resources' } | Measure-Object -Sum).Sum
+        $catNC = ($_.Group | ForEach-Object { if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 } } | Measure-Object -Sum).Sum
         $yamlDatabase.summary.categories[$_.Name] = [ordered]@{ count = $_.Count; nonCompliant = $catNC }
     }
 
@@ -746,9 +748,9 @@ function Export-AssessmentYAML {
             category             = $_.'Category'
             effectType           = $_.'Effect Type'
             enforcementMode      = $_.'Enforcement Mode'
-            nonCompliantResources= [int]$_.'Non-Compliant Resources'
-            nonCompliantPolicies = [int]$_.'Non-Compliant Policies'
-            totalResources       = [int]$_.'Total Resources'
+            nonCompliantResources= if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }
+            nonCompliantPolicies = if ($_.'Non-Compliant Policies' -match '^\d+$') { [int]$_.'Non-Compliant Policies' } else { 0 }
+            totalResources       = if ($_.'Total Resources' -match '^\d+$') { [int]$_.'Total Resources' } else { 0 }
             securityImpact       = $_.'Security Impact'
             costImpact           = $_.'Cost Impact'
             complianceImpact     = $_.'Compliance Impact'
@@ -761,7 +763,7 @@ function Export-AssessmentYAML {
             parameters           = $_.'Parameters'
             recommendation       = $_.'Recommendation'
             scope                = $_.'Scope'
-            exemptions           = [int]$_.'Exemptions'
+            exemptions           = if ($_.'Exemptions' -match '^\d+$') { [int]$_.'Exemptions' } else { 0 }
         }
     })
 
@@ -785,10 +787,10 @@ function Export-AssessmentYAML {
                 policyReference      = $_.'Policy Reference'
                 policyDisplayName    = $_.'Policy Display Name'
                 status               = $_.'Status'
-                nonCompliantResources= [int]$_.'Non-Compliant Resources'
-                compliantResources   = [int]$_.'Compliant Resources'
-                exemptResources      = [int]$_.'Exempt Resources'
-                totalResources       = [int]$_.'Total Resources'
+                nonCompliantResources= if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }
+                compliantResources   = if ($_.'Compliant Resources' -match '^\d+$') { [int]$_.'Compliant Resources' } else { 0 }
+                exemptResources      = if ($_.'Exempt Resources' -match '^\d+$') { [int]$_.'Exempt Resources' } else { 0 }
+                totalResources       = if ($_.'Total Resources' -match '^\d+$') { [int]$_.'Total Resources' } else { 0 }
                 recommendation       = $_.'Recommendation'
             }
         })
@@ -803,9 +805,9 @@ function Export-AssessmentYAML {
                 testName        = $_.'Test Name'
                 status          = $_.'Status'
                 details         = $_.'Details'
-                nonCompliant    = [int]$_.'Non-Compliant'
-                compliant       = [int]$_.'Compliant'
-                totalResources  = [int]$_.'Total Resources'
+                nonCompliant    = if ($_.'Non-Compliant' -match '^\d+$') { [int]$_.'Non-Compliant' } else { 0 }
+                compliant       = if ($_.'Compliant' -match '^\d+$') { [int]$_.'Compliant' } else { 0 }
+                totalResources  = if ($_.'Total Resources' -match '^\d+$') { [int]$_.'Total Resources' } else { 0 }
             }
         })
     }
@@ -819,10 +821,10 @@ function Export-AssessmentYAML {
                 scopeType       = $_.ScopeType
                 enforcementMode = $_.EnforcementMode
                 compliancePct   = $_.CompliancePct
-                compliant       = [int]$_.Compliant
-                nonCompliant    = [int]$_.NonCompliant
-                exempt          = [int]$_.Exempt
-                total           = [int]$_.Total
+                compliant       = if ($_.Compliant -match '^\d+$') { [int]$_.Compliant } else { 0 }
+                nonCompliant    = if ($_.NonCompliant -match '^\d+$') { [int]$_.NonCompliant } else { 0 }
+                exempt          = if ($_.Exempt -match '^\d+$') { [int]$_.Exempt } else { 0 }
+                total           = if ($_.Total -match '^\d+$') { [int]$_.Total } else { 0 }
             }
         })
     }
@@ -1035,7 +1037,7 @@ function Get-YAMLDeltaData {
     # When scope-filtered, recalculate previous summary from filtered data
     if ($scopeFilterApplied -and $prevFilteredAssignments) {
         $prevTotal = $prevFilteredAssignments.Count
-        $prevNC = ($prevFilteredAssignments | ForEach-Object { [int]$_.nonCompliantResources } | Measure-Object -Sum).Sum
+        $prevNC = ($prevFilteredAssignments | ForEach-Object { if ($_.nonCompliantResources -match '^\d+$') { [int]$_.nonCompliantResources } else { 0 } } | Measure-Object -Sum).Sum
         $prevHigh = @($prevFilteredAssignments | Where-Object { $_.riskLevel -eq 'High' }).Count
         $prevEnf = @($prevFilteredAssignments | Where-Object { $_.enforcementMode -eq 'Default' }).Count
     } else {
@@ -1045,7 +1047,7 @@ function Get-YAMLDeltaData {
         $prevEnf = if ($prevSummary.enforcedCount) { [int]$prevSummary.enforcedCount } else { 0 }
     }
     $currTotal = $CurrentResults.Count
-    $currNC = ($CurrentResults | ForEach-Object { [int]$_.'Non-Compliant Resources' } | Measure-Object -Sum).Sum
+    $currNC = ($CurrentResults | ForEach-Object { if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 } } | Measure-Object -Sum).Sum
 
     $assignDelta = $currTotal - $prevTotal
     $ncDelta = $currNC - $prevNC
@@ -1753,7 +1755,7 @@ function Export-HTMLReport {
     $highRiskCount = ($PolicyResults | Where-Object { $_.'Risk Level' -eq 'High' }).Count
     $medRiskCount = ($PolicyResults | Where-Object { $_.'Risk Level' -eq 'Medium' }).Count
     $lowRiskCount = ($PolicyResults | Where-Object { $_.'Risk Level' -eq 'Low' }).Count
-    $assignmentsWithNC = ($PolicyResults | Where-Object { [int]$_.'Non-Compliant Resources' -gt 0 }).Count
+    $assignmentsWithNC = ($PolicyResults | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) }).Count
 
     # Effect type counts
     $denyCount = @($PolicyResults | Where-Object { $_.'Effect Type' -eq 'Deny' }).Count
@@ -1779,8 +1781,8 @@ function Export-HTMLReport {
     if (-not $rgAssignments) { $rgAssignments = 0 }
 
     $scopeBreakdownRows = ($scopeGroups | ForEach-Object {
-        $ncInScope = ($_.Group | Where-Object { [int]$_.'Non-Compliant Resources' -gt 0 }).Count
-        $ncResInScope = ($_.Group | ForEach-Object { [int]$_.'Non-Compliant Resources' } | Measure-Object -Sum).Sum
+        $ncInScope = ($_.Group | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) }).Count
+        $ncResInScope = ($_.Group | ForEach-Object { if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 } } | Measure-Object -Sum).Sum
         "<tr><td>$($_.Name)</td><td>$($_.Count)</td><td>$ncInScope</td><td class=`"$(if ($ncResInScope -gt 0) { 'nc-bad' } else { 'nc-ok' })`">$ncResInScope</td></tr>"
     }) -join "`n"
 
@@ -1834,10 +1836,10 @@ function Export-HTMLReport {
     }) -join "`n"
 
     # Top 10 NC assignments
-    $topNC = $PolicyResults | Where-Object { [int]$_.'Non-Compliant Resources' -gt 0 } | Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | Select-Object -First 10
+    $topNC = $PolicyResults | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) } | Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | Select-Object -First 10
     $topNCRows = ($topNC | ForEach-Object {
         $typeClass = switch ($_.'Policy Type') { 'Initiative (Regulatory)' { 'type-regulatory' }; 'Initiative' { 'type-initiative' }; default { 'type-policy' } }
-        "<tr><td>$($_.'Display Name')</td><td><span class=`"badge $typeClass`">$($_.'Policy Type')</span></td><td class=`"nc-bad`">$([int]$_.'Non-Compliant Resources')</td><td>$($_.'Scope Name')</td><td>$($_.'Enforcement Mode')</td></tr>"
+        "<tr><td>$($_.'Display Name')</td><td><span class=`"badge $typeClass`">$($_.'Policy Type')</span></td><td class=`"nc-bad`">$(if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 })</td><td>$($_.'Scope Name')</td><td>$($_.'Enforcement Mode')</td></tr>"
     }) -join "`n"
 
     # ── CE+ Score ──
@@ -2062,7 +2064,7 @@ function Export-HTMLReport {
     # ── Build Policy Assignments rows (with category column) ──
     $policyRows = ($PolicyResults | ForEach-Object {
         $typeClass = switch ($_.'Policy Type') { 'Initiative (Regulatory)' { 'type-regulatory' }; 'Initiative' { 'type-initiative' }; default { 'type-policy' } }
-        $ncVal = [int]$_.'Non-Compliant Resources'; $ncClass = if ($ncVal -gt 0) { 'nc-bad' } else { 'nc-ok' }
+        $ncVal = if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }; $ncClass = if ($ncVal -gt 0) { 'nc-bad' } else { 'nc-ok' }
         $riskClass = switch ($_.'Risk Level') { 'High' { 'risk-high' }; 'Medium' { 'risk-med' }; default { 'risk-low' } }
         $cat = if ($_.'Category') { $_.'Category' } else { '—' }
         $compImpact = if ($_.'Compliance Impact') { $_.'Compliance Impact' } else { '—' }
@@ -2073,7 +2075,7 @@ function Export-HTMLReport {
     # ── Category breakdown for insights ──
     $categoryBreakdown = $PolicyResults | Where-Object { $_.'Category' -and $_.'Category' -ne '' } | Group-Object 'Category' | Sort-Object Count -Descending
     $categoryRows = ($categoryBreakdown | ForEach-Object {
-        $catNC = ($_.Group | ForEach-Object { [int]$_.'Non-Compliant Resources' } | Measure-Object -Sum).Sum
+        $catNC = ($_.Group | ForEach-Object { if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 } } | Measure-Object -Sum).Sum
         $ncClass = if ($catNC -gt 0) { 'nc-bad' } else { 'nc-ok' }
         "<tr><td><strong>$($_.Name)</strong></td><td>$($_.Count)</td><td class=`"$ncClass`">$catNC</td><td>$([math]::Round(($_.Count / [math]::Max($totalAssignments,1)) * 100))%</td></tr>"
     }) -join "`n"
@@ -2773,7 +2775,7 @@ $(if ($yd.NewAssignments.Count -eq 0 -and $yd.RemovedAssignments.Count -eq 0 -an
         $hasDeny = ($_.Group | Where-Object { $_.'Effect Type' -eq 'Deny' }).Count -gt 0
         $hasDINE = ($_.Group | Where-Object { $_.'Effect Type' -eq 'DeployIfNotExists' -or $_.'Effect Type' -eq 'Modify' }).Count -gt 0
         $hasAudit = ($_.Group | Where-Object { $_.'Effect Type' -eq 'Audit' -or $_.'Effect Type' -eq 'AuditIfNotExists' }).Count -gt 0
-        $ncRes = ($_.Group | ForEach-Object { [int]$_.'Non-Compliant Resources' } | Measure-Object -Sum).Sum
+        $ncRes = ($_.Group | ForEach-Object { if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 } } | Measure-Object -Sum).Sum
         [PSCustomObject]@{
             ScopeName = $_.Name; ScopeType = $_.Group[0].'Scope Type'; Count = $_.Count
             HasDeny = $hasDeny; HasDINE = $hasDINE; HasAudit = $hasAudit; NCResources = $ncRes
@@ -2804,7 +2806,7 @@ $(if ($yd.NewAssignments.Count -eq 0 -and $yd.RemovedAssignments.Count -eq 0 -an
     $securityRows = ($PolicyResults | Sort-Object @{Expression={switch ($_.'Risk Level') { 'High' {0}; 'Medium' {1}; default {2} }}}, @{Expression={switch ($_.'Security Impact') { 'High' {0}; 'Medium' {1}; default {2} }}} | ForEach-Object {
         $riskClass = switch ($_.'Risk Level') { 'High' { 'risk-high' }; 'Medium' { 'risk-med' }; default { 'risk-low' } }
         $secClass = switch ($_.'Security Impact') { 'High' { 'nc-bad' }; 'Medium' { 'warn-text' }; default { '' } }
-        $ncVal = [int]$_.'Non-Compliant Resources'; $ncClass = if ($ncVal -gt 0) { 'nc-bad' } else { 'nc-ok' }
+        $ncVal = if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }; $ncClass = if ($ncVal -gt 0) { 'nc-bad' } else { 'nc-ok' }
         $catVal = if ($_.Category) { $_.Category } else { '-' }
         "<tr><td>$($_.'Display Name')</td><td><span class=`"badge $riskClass`">$($_.'Risk Level')</span></td><td class=`"$secClass`">$($_.'Security Impact')</td><td>$catVal</td><td>$($_.'Effect Type')</td><td>$($_.'Enforcement Mode')</td><td class=`"$ncClass`">$ncVal</td><td>$($_.'Scope Name')</td></tr>"
     }) -join "`n"
@@ -2822,24 +2824,26 @@ $(if ($yd.NewAssignments.Count -eq 0 -and $yd.RemovedAssignments.Count -eq 0 -an
 
     # Critical: High-security DoNotEnforce
     $PolicyResults | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' -and $_.'Security Impact' -eq 'High' } | ForEach-Object {
+        $ncResVal = if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }
         $remediationItems += [PSCustomObject]@{
             Priority = 'Critical'; Phase = '30-day'
             Action = "Enable enforcement for '$($_.'Display Name')'"
             Category = 'Enforcement Gap'; Effort = 'Low'
             Impact = "Immediate security improvement - preventive control activated"
-            Scope = $_.'Scope Name'; NCResources = [int]$_.'Non-Compliant Resources'
+            Scope = $_.'Scope Name'; NCResources = $ncResVal
         }
     }
     # High: >10 NC resources
-    $PolicyResults | Where-Object { [int]$_.'Non-Compliant Resources' -gt 10 } | Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | ForEach-Object {
-        $effort = if ([int]$_.'Non-Compliant Resources' -gt 50) { 'High' } else { 'Medium' }
+    $PolicyResults | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 10) } | Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | ForEach-Object {
+        $ncResVal = [int]$_.'Non-Compliant Resources'
+        $effort = if ($ncResVal -gt 50) { 'High' } else { 'Medium' }
         $remediationItems += [PSCustomObject]@{
-            Priority = if ([int]$_.'Non-Compliant Resources' -gt 50) { 'Critical' } else { 'High' }
-            Phase = if ([int]$_.'Non-Compliant Resources' -gt 50) { '30-day' } else { '60-day' }
-            Action = "Remediate $([int]$_.'Non-Compliant Resources') non-compliant resources for '$($_.'Display Name')'"
+            Priority = if ($ncResVal -gt 50) { 'Critical' } else { 'High' }
+            Phase = if ($ncResVal -gt 50) { '30-day' } else { '60-day' }
+            Action = "Remediate $ncResVal non-compliant resources for '$($_.'Display Name')'"
             Category = 'Non-Compliance'; Effort = $effort
-            Impact = "Reduces compliance gap by $([int]$_.'Non-Compliant Resources') resources"
-            Scope = $_.'Scope Name'; NCResources = [int]$_.'Non-Compliant Resources'
+            Impact = "Reduces compliance gap by $ncResVal resources"
+            Scope = $_.'Scope Name'; NCResources = $ncResVal
         }
     }
     # CE+ test failures
@@ -2850,7 +2854,7 @@ $(if ($yd.NewAssignments.Count -eq 0 -and $yd.RemovedAssignments.Count -eq 0 -an
                 Action = "Fix failing CE+ test: $($_.'Test Name')"
                 Category = 'CE+ Compliance'; Effort = 'Medium'
                 Impact = "CE+ certification requirement - $($_.'Details')"
-                Scope = $_.'Control Group'; NCResources = if ($_.'Non-Compliant') { [int]$_.'Non-Compliant' } else { 0 }
+                Scope = $_.'Control Group'; NCResources = if ($_.'Non-Compliant' -match '^\d+$') { [int]$_.'Non-Compliant' } else { 0 }
             }
         }
         $CEPTestResults | Where-Object { $_.'Status' -eq 'WARN' } | ForEach-Object {
@@ -2859,7 +2863,7 @@ $(if ($yd.NewAssignments.Count -eq 0 -and $yd.RemovedAssignments.Count -eq 0 -an
                 Action = "Review CE+ warning: $($_.'Test Name')"
                 Category = 'CE+ Compliance'; Effort = 'Low'
                 Impact = "$($_.'Details')"
-                Scope = $_.'Control Group'; NCResources = if ($_.'Non-Compliant') { [int]$_.'Non-Compliant' } else { 0 }
+                Scope = $_.'Control Group'; NCResources = if ($_.'Non-Compliant' -match '^\d+$') { [int]$_.'Non-Compliant' } else { 0 }
             }
         }
     }
@@ -3149,8 +3153,8 @@ $(if ($yd.NewAssignments.Count -eq 0 -and $yd.RemovedAssignments.Count -eq 0 -an
         # One row per regulatory initiative (not grouped)
         $regPolicies | Select-Object -Property 'Display Name','Non-Compliant Resources','Total Resources','Scope Name','Enforcement Mode','Effect Type' -Unique | ForEach-Object {
             $regDispName = $_.'Display Name'
-            $regNC = [int]$_.'Non-Compliant Resources'
-            $regTotal = [int]$_.'Total Resources'
+            $regNC = if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }
+            $regTotal = if ($_.'Total Resources' -match '^\d+$') { [int]$_.'Total Resources' } else { 0 }
             $regScope = $_.'Scope Name'
             $regEnforce = $_.'Enforcement Mode'
             $regStatusBadge = if ($regEnforce -eq 'DoNotEnforce') { "<span class='badge status-warn'>Audit Only</span>" } elseif ($regNC -gt 0) { "<span class='badge status-fail'>Non-Compliant</span>" } else { "<span class='badge status-pass'>Compliant</span>" }
@@ -6763,14 +6767,14 @@ $classicInitCount = ($results | Where-Object { $_.'Policy Type' -eq 'Initiative'
 $regulatoryInitCount = ($results | Where-Object { $_.'Policy Type' -eq 'Initiative (Regulatory)' }).Count
 $enforcedCount = ($results | Where-Object { $_.'Enforcement Mode' -eq 'Default' }).Count
 $auditOnlyCount = ($results | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' }).Count
-$totalNCResources = ($results | ForEach-Object { [int]$_.'Non-Compliant Resources' } | Measure-Object -Sum).Sum
-$assignmentsWithNC = ($results | Where-Object { [int]$_.'Non-Compliant Resources' -gt 0 }).Count
+$totalNCResources = ($results | ForEach-Object { if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 } } | Measure-Object -Sum).Sum
+$assignmentsWithNC = ($results | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) }).Count
 $mgAssignments = ($results | Where-Object { $_.'Scope Type' -eq 'Management Group' }).Count
 $subAssignments = ($results | Where-Object { $_.'Scope Type' -eq 'Subscription' }).Count
 $rgAssignments = ($results | Where-Object { $_.'Scope Type' -eq 'Resource Group' }).Count
 $totalExemptions = $exemptionData.Count
 $activeExemptions = @($exemptionData | Where-Object { -not $_.'Is Expired' }).Count
-$assignmentsWithExemptions = ($results | Where-Object { [int]$_.'Exemptions' -gt 0 }).Count
+$assignmentsWithExemptions = ($results | Where-Object { ($_.'Exemptions' -match '^\d+$') -and ([int]$_.'Exemptions' -gt 0) }).Count
 
 Write-Host ""
 Write-Host "┌─────────────────────────────────────────────────────────────────────────────┐" -ForegroundColor Cyan
@@ -6837,14 +6841,14 @@ Write-Host "└─────────────────────�
 if ($assignmentsWithNC -gt 0) {
     Write-Host ""
     Write-Host "  Top Non-Compliant Assignments:" -ForegroundColor Red
-    $topIssues = $results | Where-Object { [int]$_.'Non-Compliant Resources' -gt 0 } |
+    $topIssues = $results | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) } |
         Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | Select-Object -First 10
     $issueNum = 0
     foreach ($issue in $topIssues) {
         $issueNum++
         $dName = if ($issue.'Display Name'.Length -gt 65) { $issue.'Display Name'.Substring(0, 62) + '...' } else { $issue.'Display Name' }
         Write-Host "    $issueNum. " -NoNewline -ForegroundColor DarkGray
-        Write-Host "$([int]$issue.'Non-Compliant Resources') NC" -NoNewline -ForegroundColor Red
+        Write-Host "$(if ($issue.'Non-Compliant Resources' -match '^\d+$') { [int]$issue.'Non-Compliant Resources' } else { 0 }) NC" -NoNewline -ForegroundColor Red
         Write-Host " | $dName" -ForegroundColor Yellow
     }
 }
@@ -6899,12 +6903,12 @@ if ($QuickAssess) {
     }
 
     # Top 5 NC assignments
-    $topNCQuick = $results | Where-Object { [int]$_.'Non-Compliant Resources' -gt 0 } | Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | Select-Object -First 5
+    $topNCQuick = $results | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) } | Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | Select-Object -First 5
     if ($topNCQuick.Count -gt 0) {
         Write-Host "`n  🔴 Top Non-Compliant Assignments:" -ForegroundColor Red
         foreach ($nc in $topNCQuick) {
             $dn = if ($nc.'Display Name'.Length -gt 55) { $nc.'Display Name'.Substring(0, 52) + '...' } else { $nc.'Display Name' }
-            Write-Host "    $([int]$nc.'Non-Compliant Resources') NC | $dn" -ForegroundColor Yellow
+            Write-Host "    $(if ($nc.'Non-Compliant Resources' -match '^\d+$') { [int]$nc.'Non-Compliant Resources' } else { 0 }) NC | $dn" -ForegroundColor Yellow
         }
     }
 
@@ -6913,7 +6917,7 @@ if ($QuickAssess) {
     if ($categoryGroups.Count -gt 0) {
         Write-Host "`n  📂 Policy Categories:" -ForegroundColor Cyan
         foreach ($cg in $categoryGroups) {
-            $cgNC = ($cg.Group | ForEach-Object { [int]$_.'Non-Compliant Resources' } | Measure-Object -Sum).Sum
+            $cgNC = ($cg.Group | ForEach-Object { if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 } } | Measure-Object -Sum).Sum
             $ncInfo = if ($cgNC -gt 0) { " ($cgNC NC)" } else { "" }
             Write-Host "    $($cg.Name): $($cg.Count) assignments$ncInfo" -ForegroundColor Gray
         }
