@@ -6,6 +6,44 @@
 
 ---
 
+## v3.1.0 — Multi-Assignment Awareness & Per-Scope Compliance Breakdown
+
+### 🔍 Multi-Assignment Detection & Deduplication
+
+When the Cyber Essentials initiative is assigned at multiple scopes (e.g., `Online` and `Connectivity` management groups), v3.1.0 automatically detects all assignments and deduplicates compliance data using **strictest-state-wins** logic.
+
+- **Automatic detection**: The script identifies all CE initiative assignments across your tenant and reports their scopes and enforcement modes.
+- **Strictest-state-wins deduplication**: All ARG compliance queries use a two-pass KQL pattern — `arg_min(stateRank, complianceState) by resourceId` — to select the strictest state per resource before counting. Ranking: `NonCompliant (1) > Unknown (2) > Exempt (3) > Compliant (4)`.
+- **Numbers that add up**: The per-scope compliance query was fixed so that `Compliant + NonCompliant + Exempt = Total` for every scope. Previously, resources evaluated by multiple policies within an assignment could be double-counted.
+
+### 📊 Per-Scope Collapsible Cards (HTML Report)
+
+When multi-assignment is detected, each CE initiative assignment gets a **collapsible card** in the HTML report containing:
+
+| Section | What it shows |
+|---|---|
+| **Overall Resource Compliance** | Per-scope resource-level bar and table (deduplicated) |
+| **CE+ Control Group Compliance** | Policy-level compliance bars per control group (Firewalls, General Controls, Malware Protection, etc.) — same data source and numbers as the standalone view |
+| **CE+ Policy Compliance Detail** | Collapsible table of all CE policies with status, NC/Compliant/Total counts, and recommendations |
+| **CE+ Assessment Tests** | Test status legend, PASS/FAIL/WARN/SKIP/MANUAL summary cards, and full test results table |
+| **Assignment Details** | Scope name, scope type, enforcement mode |
+
+The standalone top-level sections (Test Results, Control Group Compliance, test summary cards) are automatically hidden when multi-assignment is detected, since the same information is now inside each scope card.
+
+### 🎨 Clearer Section Labels
+
+All sections now include descriptive text explaining what they measure:
+- **Overall Resource Compliance**: "Unique Azure resources evaluated against all policies... Each resource is counted once using strictest-state-wins deduplication."
+- **CE+ Control Group Compliance**: Uses policy-level counts consistent with the standalone section.
+- **CE+ Assessment Tests**: "Automated assessment checks... These are tenant-wide evaluations shared across all assignments."
+
+### 📋 Console & YAML
+
+- **Per-scope console output**: When multiple CE assignments are detected, the console shows compliance breakdown per scope before the test summary.
+- **Per-scope YAML export**: The YAML database includes a `cepPerScopeCompliance` section for multi-assignment environments.
+
+---
+
 ## v3.0.0 — Complete Interface Overhaul, Scoring Accuracy & Enhanced Reporting
 
 ### 🔧 Cost & Security Scoring Accuracy for Parameterised Initiatives

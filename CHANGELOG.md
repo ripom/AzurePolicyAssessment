@@ -5,6 +5,49 @@ All notable changes to the Azure Policy & Compliance Assessment Tool will be doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-02-20
+
+### 🔍 Multi-Assignment Awareness for Cyber Essentials Plus
+
+#### Added — Multi-Assignment Detection & Deduplication
+- **Automatic multi-assignment detection**: When the Cyber Essentials initiative is assigned at multiple scopes (e.g., `Online` and `Connectivity` management groups), the script now detects and reports all assignments with their scopes and enforcement modes.
+- **Strictest-state-wins deduplication**: All three ARG compliance queries (initiative compliance, individual assignment compliance, and CE Show compliance) now use a two-pass KQL pattern: first `arg_min(stateRank, complianceState) by resourceId` to select the strictest compliance state per resource, then aggregate. This prevents double-counting when a resource is evaluated by overlapping initiative assignments.
+- **Deduplication severity ranking**: `NonCompliant (1) > Unknown (2) > Exempt (3) > Compliant (4)`. If any assignment reports a resource as non-compliant, it is treated as non-compliant regardless of what other assignments report.
+- **Enhanced TEST 2 console output**: When multiple assignments are detected, displays per-assignment scope and enforcement breakdown, and notes that deduplication is active.
+
+#### Added — HTML Report Multi-Assignment Banner
+- **Multi-assignment info banner**: When 2+ Cyber Essentials initiative assignments are detected, the HTML report's CE+ Test Results section shows a prominent warning box listing all assignments, their scopes, scope types, and enforcement modes (Enforced vs Audit Only).
+- **Per-scope compliance breakdown**: Within the multi-assignment banner, a dedicated table shows each scope's compliance percentage, progress bar, compliant/non-compliant/exempt counts, and enforcement mode — enabling quick identification of which scope is underperforming.
+- **Expandable assignment detail**: The banner includes a collapsible `<details>` section with a table of all detected assignments.
+- **Deduplication explanation**: The banner explains the strictest-state-wins deduplication logic so report readers understand how compliance percentages are calculated.
+
+#### Added — Per-Scope Console Output
+- **Per-scope compliance breakdown in console**: When multiple CE assignments are detected, the console displays a breakdown showing each scope's compliance percentage, compliant/non-compliant/exempt counts, and enforcement mode before the test summary.
+- **Separate ARG query for per-scope data**: A dedicated ARG query retrieves compliance stats grouped by assignment ID, providing independent compliance metrics for each scope.
+- **Per-scope data in YAML export**: The YAML database now includes a `cepPerScopeCompliance` section with compliance breakdown per assignment when multi-assignment is detected.
+
+#### Fixed
+- **Compliance double-counting**: Resources evaluated by multiple overlapping initiative assignments (e.g., same initiative at parent and child management groups) could previously be counted multiple times, leading to inflated or contradictory compliance figures. The new `arg_min` deduplication resolves this.
+- **DoNotEnforce masking**: A `DoNotEnforce` (audit-only) assignment could previously report a resource as compliant and mask a `NonCompliant` result from an enforced assignment at another scope. The strictest-state-wins logic now ensures non-compliance is always surfaced.
+
+#### Changed
+- **Version**: Updated to 3.1.0
+- **Three ARG queries updated**: Initiative compliance query, individual assignment compliance query, and CE Show section compliance query — all now include the strictest-state deduplication step.
+- **Per-scope query deduplication**: The per-scope compliance query now uses `arg_min(stateRank, complianceState)` to ensure Compliant + NonCompliant + Exempt = Total for each scope.
+
+#### Added — Per-Scope Collapsible Cards (HTML)
+- **Per-scope cards**: Each CE initiative assignment gets a collapsible card in the HTML report containing all compliance details for that scope.
+- **Per-scope control group bars**: Each scope card includes CE+ Control Group Compliance bars (Firewalls, General Controls, Malware Protection, etc.) using the same policy-level counts as the standalone section — consistent numbers across all views.
+- **Per-scope policy detail table**: Each scope card includes a collapsible CE+ Policy Compliance Detail table showing per-policy compliance status.
+- **Per-scope test summary cards**: The PASS/FAIL/WARN/SKIP/MANUAL summary cards and test status legend are included inside each scope card (hidden from top level when multi-assignment).
+- **Compliance Status Legend**: Full legend with bar thresholds and Not Assigned status included in each scope card.
+- **Clearer section labels**: "Overall Resource Compliance" (resources, deduped), "CE+ Control Group Compliance" (policies per group), "CE+ Assessment Tests" (shared across scopes), "CE+ Policy Compliance Detail" (shared across scopes).
+- **Standalone sections hidden when multi-assignment**: The top-level Test Results Detail, Control Group Compliance, test summary cards, and status legend are conditionally hidden when multi-assignment to avoid duplication.
+
+### 🎨 Display
+
+- **Simplified output boxes**: Rewrote update notification banner and update success box to use horizontal lines only (`═══` and `───`). Removed vertical `║` borders that caused misalignment with variable-length content.
+
 ## [3.0.2] - 2026-02-19
 
 ### 🔄 Update Mechanism

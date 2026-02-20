@@ -140,8 +140,8 @@
     Exports YAML database and shows detailed delta against a previous assessment.
 
 .NOTES
-    Version: 3.0.2
-    Last Updated: February 19, 2026
+    Version: 3.1.0
+    Last Updated: February 20, 2026
     Author: Riccardo Pomato
     
     Requires PowerShell 7.0 or later (Windows PowerShell 5.1 is not supported)
@@ -156,8 +156,13 @@
     - Azure CE+ Compliance Offering    : https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus
     
     Version History:
+    - 3.1.0 (2026-02-20): CE+ multi-assignment awareness — auto-detects initiative assigned at
+                          multiple scopes, strictest-state-wins deduplication, per-scope compliance
+                          breakdown in HTML/console/YAML, per-scope control group bars, per-scope
+                          policy detail and test summary cards inside collapsible scope cards.
     - 3.0.2 (2026-02-19): Update mechanism — VERSION.json uses history array exclusively;
                           update banner and -Update flow show cumulative per-version changes.
+                          Display — simplified update banner and success box to horizontal lines.
     - 3.0.1 (2026-02-19): Performance optimisation — replaced O(n²) array += with List<T>.Add().
     - 3.0.0 (2026-02-19): Major release — see WHATS-NEW-v3.0.md for full details.
                           • Automatic update check: fetches VERSION.json from GitHub at startup
@@ -234,8 +239,8 @@ param(
 )
 
 # Script Version
-$ScriptVersion = "3.0.2"
-$ScriptLastUpdated = "2026-02-19"
+$ScriptVersion = "3.1.0"
+$ScriptLastUpdated = "2026-02-20"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Update check: fetches VERSION.json from GitHub to detect newer releases
@@ -293,19 +298,13 @@ function Show-UpdateNotification {
     param([hashtable]$UpdateInfo)
     if (-not $UpdateInfo) { return }
 
-    # Box inner width = 68 chars (content area between "  ║  " and "  ║")
-    $boxW = 68
-    function Write-BoxLine {
-        param([string]$Text, [string]$Color = 'Cyan')
-        if ($Text.Length -gt $boxW) { $Text = $Text.Substring(0, $boxW - 1) + '…' }
-        $pad = $boxW - $Text.Length
-        Write-Host "  ║  $Text$(' ' * $pad)  ║" -ForegroundColor $Color
-    }
+    $line = '════════════════════════════════════════════════════════════════════════════'
+    $thin = '────────────────────────────────────────────────────────────────────────────'
 
     Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-    Write-BoxLine "UPDATE AVAILABLE: v$($UpdateInfo.CurrentVersion) → v$($UpdateInfo.LatestVersion) (released $($UpdateInfo.ReleaseDate))" 'Yellow'
-    Write-Host "  ╠══════════════════════════════════════════════════════════════════════════╣" -ForegroundColor Yellow
+    Write-Host "  $line" -ForegroundColor Yellow
+    Write-Host "  UPDATE AVAILABLE: v$($UpdateInfo.CurrentVersion) → v$($UpdateInfo.LatestVersion) (released $($UpdateInfo.ReleaseDate))" -ForegroundColor Yellow
+    Write-Host "  $line" -ForegroundColor Yellow
 
     # Show changes grouped by version (history entries are already filtered & sorted)
     if ($UpdateInfo.History -and $UpdateInfo.History.Count -gt 0) {
@@ -313,28 +312,28 @@ function Show-UpdateNotification {
         for ($v = 0; $v -lt $maxVersions; $v++) {
             $entry = $UpdateInfo.History[$v]
             if ($v -gt 0) {
-                Write-Host "  ╠──────────────────────────────────────────────────────────────────────────╣" -ForegroundColor DarkGray
+                Write-Host "  $thin" -ForegroundColor DarkGray
             }
-            Write-BoxLine "v$($entry.version) — $($entry.releaseDate)" 'White'
+            Write-Host "  v$($entry.version) — $($entry.releaseDate)" -ForegroundColor White
 
             $maxHighlights = [Math]::Min(5, $entry.highlights.Count)
             for ($i = 0; $i -lt $maxHighlights; $i++) {
-                Write-BoxLine "  • $($entry.highlights[$i])" 'Cyan'
+                Write-Host "    • $($entry.highlights[$i])" -ForegroundColor Cyan
             }
             if ($entry.highlights.Count -gt 5) {
-                Write-BoxLine "    ...and $($entry.highlights.Count - 5) more changes" 'DarkCyan'
+                Write-Host "      ...and $($entry.highlights.Count - 5) more changes" -ForegroundColor DarkCyan
             }
         }
         if ($UpdateInfo.History.Count -gt 5) {
-            Write-Host "  ╠──────────────────────────────────────────────────────────────────────────╣" -ForegroundColor DarkGray
-            Write-BoxLine "...and $($UpdateInfo.History.Count - 5) more version(s) — see full changelog" 'DarkCyan'
+            Write-Host "  $thin" -ForegroundColor DarkGray
+            Write-Host "  ...and $($UpdateInfo.History.Count - 5) more version(s) — see full changelog" -ForegroundColor DarkCyan
         }
     }
 
-    Write-Host "  ╠══════════════════════════════════════════════════════════════════════════╣" -ForegroundColor Yellow
-    Write-BoxLine "Run with -Update to upgrade automatically" 'Green'
-    Write-BoxLine "Full changelog: $($UpdateInfo.ReleaseNotesUrl)" 'Gray'
-    Write-Host "  ╚══════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
+    Write-Host "  $line" -ForegroundColor Yellow
+    Write-Host "  Run with -Update to upgrade automatically" -ForegroundColor Green
+    Write-Host "  Full changelog: $($UpdateInfo.ReleaseNotesUrl)" -ForegroundColor Gray
+    Write-Host "  $line" -ForegroundColor Yellow
     Write-Host ""
 }
 
@@ -465,21 +464,15 @@ function Update-ScriptFromRepo {
     }
 
     # 8. Success
-    $boxW = 68
-    function Write-SuccessLine {
-        param([string]$Text)
-        if ($Text.Length -gt $boxW) { $Text = $Text.Substring(0, $boxW - 1) + '…' }
-        $pad = $boxW - $Text.Length
-        Write-Host "  ║  $Text$(' ' * $pad)  ║" -ForegroundColor Green
-    }
+    $successLine = '════════════════════════════════════════════════════════════════════════════'
 
     Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Green
-    Write-SuccessLine "✓ UPDATE SUCCESSFUL: v$ScriptVersion → v$($versionInfo.version)"
-    Write-SuccessLine ""
-    Write-SuccessLine "Backup saved as: $(Split-Path $backupPath -Leaf)"
-    Write-SuccessLine "Please re-run the script to use the new version."
-    Write-Host "  ╚══════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Green
+    Write-Host "  $successLine" -ForegroundColor Green
+    Write-Host "  ✓ UPDATE SUCCESSFUL: v$ScriptVersion → v$($versionInfo.version)" -ForegroundColor Green
+    Write-Host "" -ForegroundColor Green
+    Write-Host "  Backup saved as: $(Split-Path $backupPath -Leaf)" -ForegroundColor Green
+    Write-Host "  Please re-run the script to use the new version." -ForegroundColor Green
+    Write-Host "  $successLine" -ForegroundColor Green
     Write-Host ""
     exit 0
 }
@@ -669,6 +662,10 @@ function Export-AssessmentYAML {
         [hashtable]$ComplianceData,
         [array]$CEPExportData,
         [array]$CEPTestResults,
+        [array]$CEPPerScopeData,
+        [hashtable]$CEPPerScopeGroupData = @{},
+        [hashtable]$CEPPerScopeGroupRaw = @{},
+        [hashtable]$CEPRefIdToGroupDisplay = @{},
         [array]$NCExportData,
         [array]$ExemptionData,
         [string]$TenantId,
@@ -809,6 +806,23 @@ function Export-AssessmentYAML {
                 nonCompliant    = [int]$_.'Non-Compliant'
                 compliant       = [int]$_.'Compliant'
                 totalResources  = [int]$_.'Total Resources'
+            }
+        })
+    }
+
+    # CE+ per-scope compliance breakdown (multi-assignment only)
+    if ($CEPPerScopeData -and $CEPPerScopeData.Count -gt 0) {
+        $yamlDatabase['cepPerScopeCompliance'] = @($CEPPerScopeData | ForEach-Object {
+            [ordered]@{
+                assignmentId    = $_.AssignmentId
+                displayName     = $_.DisplayName
+                scopeType       = $_.ScopeType
+                enforcementMode = $_.EnforcementMode
+                compliancePct   = $_.CompliancePct
+                compliant       = [int]$_.Compliant
+                nonCompliant    = [int]$_.NonCompliant
+                exempt          = [int]$_.Exempt
+                total           = [int]$_.Total
             }
         })
     }
@@ -1707,6 +1721,10 @@ function Export-HTMLReport {
         [hashtable]$ComplianceData = @{},
         [array]$CEPExportData = @(),
         [array]$CEPTestResults = @(),
+        [array]$CEPPerScopeData = @(),
+        [hashtable]$CEPPerScopeGroupData = @{},
+        [hashtable]$CEPPerScopeGroupRaw = @{},
+        [hashtable]$CEPRefIdToGroupDisplay = @{},
         [array]$NCExportData = @(),
         [array]$ExemptionData = @(),
         [string]$TenantName = '',
@@ -1832,6 +1850,213 @@ function Export-HTMLReport {
         $tManual = @($CEPTestResults | Where-Object { $_.'Status' -eq 'MANUAL' }).Count
         $tAutomated = $tPass + $tFail
         $ceScore = if ($tAutomated -gt 0) { [math]::Round(($tPass / $tAutomated) * 100) } else { 0 }
+    }
+
+    # ── CE+ Multi-Assignment Detection ──
+    # Detect if the Cyber Essentials initiative is assigned at multiple scopes
+    $ceMultiAssignmentBanner = ''
+    $ceInitiativeAssignments = @($PolicyResults | Where-Object { 
+        $_.'Display Name' -like '*Cyber Essentials*' -and $_.'Policy Type' -like '*Initiative*'
+    })
+    if ($ceInitiativeAssignments.Count -gt 1) {
+        $ceEnforcedCount = @($ceInitiativeAssignments | Where-Object { $_.'Enforcement Mode' -ne 'DoNotEnforce' }).Count
+        $ceAuditOnlyCount = $ceInitiativeAssignments.Count - $ceEnforcedCount
+
+        # Determine if we have multi-assignment (controls conditional rendering later)
+        $isMultiAssignment = $true
+
+        # Build individual collapsible cards — one per scope
+        $perScopeCards = ($ceInitiativeAssignments | ForEach-Object {
+            $asgn = $_
+            $scopeName = $asgn.'Scope Name'
+            $scopeType = $asgn.'Scope Type'
+            $displayName = $asgn.'Display Name'
+            $enfMode = $asgn.'Enforcement Mode'
+            $enfClass = if ($enfMode -eq 'DoNotEnforce') { 'status-warn' } else { 'status-pass' }
+            $enfLabel = if ($enfMode -eq 'DoNotEnforce') { 'Audit Only' } else { 'Enforced' }
+            $enfIcon  = if ($enfMode -eq 'DoNotEnforce') { '&#x26A0;&#xFE0F;' } else { '&#x2705;' }
+
+            # Match per-scope compliance data by display name
+            $scopeData = $null
+            if ($CEPPerScopeData -and $CEPPerScopeData.Count -gt 0) {
+                $scopeData = $CEPPerScopeData | Where-Object { $_.DisplayName -eq $displayName } | Select-Object -First 1
+            }
+
+            # Compliance summary for the header badge
+            $headerBadge = ''
+            $complianceSection = ''
+            if ($scopeData) {
+                $pct = [int]$scopeData.CompliancePct
+                $barColor = if ($pct -ge 90) { '#22c55e' } elseif ($pct -ge 50) { '#f0ad4e' } else { '#dc3545' }
+                $headerBadge = "<span style=`"margin-left:10px;font-weight:700;color:${barColor};`">${pct}%</span>"
+                $complianceSection = @"
+                <details style="margin-top:6px;" open>
+                    <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;">&#x1F4CA; Overall Resource Compliance</summary>
+                    <p style="font-size:0.78rem;color:var(--text-dim);margin:4px 0 8px 0;">Unique <strong>Azure resources</strong> evaluated against all policies in this initiative assignment. Each resource is counted once using strictest-state-wins deduplication.</p>
+                    <div style="padding:10px 0 4px 0;">
+                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                            <div style="flex:1;background:var(--table-stripe);border-radius:4px;height:18px;overflow:hidden;">
+                                <div style="width:${pct}%;height:100%;background:${barColor};border-radius:4px;transition:width .3s;"></div>
+                            </div>
+                            <span style="font-weight:700;font-size:1.1rem;min-width:48px;text-align:right;color:${barColor};">${pct}%</span>
+                        </div>
+                        <table style="font-size:0.85rem;width:100%;">
+                            <thead><tr><th style="text-align:center;">Compliant</th><th style="text-align:center;color:#dc3545;">Non-Compliant</th><th style="text-align:center;">Exempt</th><th style="text-align:center;">Total Resources</th></tr></thead>
+                            <tbody><tr>
+                                <td style="text-align:center;color:#22c55e;font-weight:600;">$($scopeData.Compliant)</td>
+                                <td style="text-align:center;color:#dc3545;font-weight:600;">$($scopeData.NonCompliant)</td>
+                                <td style="text-align:center;">$($scopeData.Exempt)</td>
+                                <td style="text-align:center;font-weight:600;">$($scopeData.Total)</td>
+                            </tr></tbody>
+                        </table>
+                    </div>
+                </details>
+"@
+            }
+
+            # ── Control Group Compliance bars per scope (same data as standalone) ──
+            $controlGroupSection = ''
+            if ($CEPExportData -and $CEPExportData.Count -gt 0) {
+                $scopeCeGroups = $CEPExportData | Group-Object 'CE Control Group'
+                $totalPoliciesInGroups = $CEPExportData.Count
+                $groupBars = ($scopeCeGroups | ForEach-Object {
+                    $gName = $_.Name; $gTotal = $_.Count
+                    $gCompliant = ($_.Group | Where-Object { $_.'Status' -like '*Compliant*' -and $_.'Status' -notlike '*Non*' }).Count
+                    $gNC = ($_.Group | Where-Object { $_.'Status' -like '*Non-Compliant*' }).Count
+                    $gNA = ($_.Group | Where-Object { $_.'Status' -eq 'Not Assigned' }).Count
+                    $gPct = if ($gTotal -gt 0) { [math]::Round(($gCompliant / $gTotal) * 100) } else { 0 }
+                    $gBarClass = if ($gPct -ge 80) { 'bar-green' } elseif ($gPct -ge 50) { 'bar-amber' } else { 'bar-red' }
+                    @"
+                    <div class="ce-group-card">
+                        <div class="ce-group-name">$gName</div>
+                        <div class="ce-bar-container"><div class="ce-bar $gBarClass" style="width:${gPct}%"></div></div>
+                        <div class="ce-stats">$gCompliant / $gTotal compliant (${gPct}%) $(if ($gNC -gt 0) { "| <span class='nc-bad'>$gNC non-compliant</span>" }) $(if ($gNA -gt 0) { "| <span class='status-na-text'>$gNA not assigned</span>" })</div>
+                    </div>
+"@
+                }) -join "`n"
+                $controlGroupSection = @"
+                <div style="margin-top:8px;">
+                    <h4 style="font-size:0.9rem;font-weight:600;margin:0 0 6px 0;">CE+ Control Group Compliance <span class="experimental-tag">Experimental</span></h4>
+                    <div class="legend" style="margin-bottom:10px;padding:10px;">
+                        <h4 style="margin-top:0;">&#x1F3F7;&#xFE0F; Compliance Status Legend</h4>
+                        <div class="legend-grid" style="margin-bottom:8px;">
+                            <div class="legend-item"><span class="legend-dot dot-green"></span> <strong>Compliant</strong> &mdash; policy requirement met, resources are in desired state</div>
+                            <div class="legend-item"><span class="legend-dot dot-red"></span> <strong>Non-Compliant</strong> &mdash; resources violate the policy, remediation needed</div>
+                            <div class="legend-item"><span class="legend-dot dot-gray"></span> <strong>Not Evaluated</strong> &mdash; compliance data not yet available from Azure</div>
+                            <div class="legend-item"><span class="legend-dot dot-amber"></span> <strong>Not Assigned</strong> &mdash; policy is not assigned to any scope</div>
+                        </div>
+                        <div class="legend-grid">
+                            <div class="legend-item"><span class="legend-dot dot-green"></span> Bar &ge; 80% &mdash; strong compliance, meets certification target</div>
+                            <div class="legend-item"><span class="legend-dot dot-amber"></span> Bar 50-79% &mdash; partial compliance, gaps exist</div>
+                            <div class="legend-item"><span class="legend-dot dot-red"></span> Bar &lt; 50% &mdash; weak compliance, significant remediation required</div>
+                        </div>
+                    </div>
+                    $groupBars
+                </div>
+"@
+            }
+
+            # ── CE+ Policy Compliance Detail per scope ──
+            $policyDetailSection = ''
+            if ($CEPExportData -and $CEPExportData.Count -gt 0) {
+                $scopeCeRows = ($CEPExportData | ForEach-Object {
+                    $ncVal = $_.'Non-Compliant Resources'; $ncClass = if ($ncVal -ne 'N/A' -and [int]$ncVal -gt 0) { 'nc-bad' } else { 'nc-ok' }
+                    $sClass = switch -Wildcard ($_.'Status') { '*Non-Compliant*' { 'status-fail' }; '*Compliant*' { 'status-pass' }; 'Not Assigned' { 'status-warn' }; default { 'status-skip' } }
+                    "<tr><td>$($_.'CE Control Group')</td><td>$($_.'Policy Display Name')</td><td><span class=`"badge $sClass`">$($_.'Status')</span></td><td class=`"$ncClass`">$ncVal</td><td>$($_.'Compliant Resources')</td><td>$($_.'Total Resources')</td><td class=`"rec-cell`">$($_.'Recommendation')</td></tr>"
+                }) -join "`n"
+                $policyDetailSection = @"
+                <details style="margin-top:6px;">
+                    <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;">&#x1F4CB; CE+ Policy Compliance Detail ($($CEPExportData.Count) policies) <span style="font-size:0.75rem;color:var(--text-dim);font-weight:400;">shared across all scopes</span></summary>
+                    <p style="font-size:0.78rem;color:var(--text-dim);margin:4px 0 0 0;padding:0 8px;">Per-<strong>policy</strong> compliance status for each policy definition in the CE initiative. Shows whether each policy has any non-compliant resources.</p>
+                    <div style="padding:8px 0;">
+                        <div class="table-wrap">
+                        <table style="font-size:0.82rem;">
+                        <thead><tr><th>Control Group</th><th>Policy</th><th>Status</th><th>NC Resources</th><th>Compliant</th><th>Total</th><th>Recommendation</th></tr></thead>
+                        <tbody>$scopeCeRows</tbody>
+                        </table>
+                        </div>
+                    </div>
+                </details>
+"@
+            }
+
+            # ── Test Results Detail per scope (shared data, collapsed) ──
+            $testDetailSection = ''
+            if ($CEPTestResults.Count -gt 0) {
+                $scopeTestRows = ($CEPTestResults | ForEach-Object {
+                    $statusClass = switch ($_.'Status') { 'PASS' { 'status-pass' }; 'FAIL' { 'status-fail' }; 'WARN' { 'status-warn' }; 'SKIP' { 'status-skip' }; 'MANUAL' { 'status-manual' }; default { '' } }
+                    "<tr><td>$($_.'Test #')</td><td>$($_.'Control Group')</td><td>$($_.'Test Name')</td><td><span class=`"badge $statusClass`">$($_.'Status')</span></td><td>$($_.'Details')</td><td>$($_.'Non-Compliant')</td><td>$($_.'Compliant')</td><td>$($_.'Total Resources')</td></tr>"
+                }) -join "`n"
+                $testDetailSection = @"
+                <details style="margin-top:6px;">
+                    <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;">&#x1F9EA; CE+ Assessment Tests ($($CEPTestResults.Count) tests) <span style="font-size:0.75rem;color:var(--text-dim);font-weight:400;">shared across all scopes</span></summary>
+                    <p style="font-size:0.78rem;color:var(--text-dim);margin:4px 0 0 0;padding:0 8px;">Automated <strong>assessment checks</strong> (prerequisites, per-group compliance, and CE+ v3.2 specification tests). These are tenant-wide evaluations shared across all assignments.</p>
+                    <div style="padding:8px 0;">
+                        <div class="note-box" style="margin-bottom:8px;"><span class="note-icon">&#x1F4AC;</span><span><strong>Test Statuses:</strong> <span class="badge status-pass">PASS</span> = requirement met. <span class="badge status-fail">FAIL</span> = requirement not met, action needed. <span class="badge status-warn">WARN</span> = partial compliance, review recommended. <span class="badge status-skip">SKIP</span> = test could not run (data unavailable). <span class="badge status-manual">MANUAL</span> = requires human verification (cannot be automated).</span></div>
+                        <div class="summary-cards" style="margin-bottom:10px;">
+                            <div class="card card-green"><div class="card-num">$tPass</div><div class="card-label">Passed</div></div>
+                            <div class="card card-red"><div class="card-num">$tFail</div><div class="card-label">Failed</div></div>
+                            <div class="card card-amber"><div class="card-num">$tWarn</div><div class="card-label">Warnings</div></div>
+                            <div class="card card-gray"><div class="card-num">$tSkip</div><div class="card-label">Skipped</div></div>
+                            <div class="card card-purple"><div class="card-num">$tManual</div><div class="card-label">Manual</div></div>
+                        </div>
+                        <div class="table-wrap">
+                        <table style="font-size:0.82rem;">
+                        <thead><tr><th>Test #</th><th>Control Group</th><th>Test Name</th><th>Status</th><th>Details</th><th>NC</th><th>Compliant</th><th>Total</th></tr></thead>
+                        <tbody>$scopeTestRows</tbody>
+                        </table>
+                        </div>
+                    </div>
+                </details>
+"@
+            }
+
+            # Assignment details collapsible
+            $assignmentSection = @"
+                <details style="margin-top:6px;">
+                    <summary style="cursor:pointer;font-size:0.85rem;">Show assignment details</summary>
+                    <div style="padding:8px 0;">
+                        <table style="font-size:0.85rem;width:100%;">
+                            <tbody>
+                                <tr><td style="font-weight:600;width:130px;">Display Name</td><td>${displayName}</td></tr>
+                                <tr><td style="font-weight:600;">Scope Name</td><td>${scopeName}</td></tr>
+                                <tr><td style="font-weight:600;">Scope Type</td><td>${scopeType}</td></tr>
+                                <tr><td style="font-weight:600;">Enforcement</td><td><span class="badge ${enfClass}">${enfIcon} ${enfLabel}</span></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+"@
+
+            # Outer card per scope
+            @"
+        <details style="margin-top:8px;border:1px solid var(--table-border);border-radius:6px;padding:2px 12px;" open>
+            <summary style="cursor:pointer;font-size:0.9rem;font-weight:600;padding:6px 0;">
+                ${scopeName} <span style="font-size:0.8rem;color:var(--text-dim);font-weight:400;">(${scopeType})</span>
+                <span class="badge ${enfClass}" style="margin-left:8px;font-size:0.75rem;">${enfIcon} ${enfLabel}</span>
+                ${headerBadge}
+            </summary>
+            <div style="padding:4px 0 8px 0;">
+                ${complianceSection}
+                ${controlGroupSection}
+                ${policyDetailSection}
+                ${testDetailSection}
+                ${assignmentSection}
+            </div>
+        </details>
+"@
+        }) -join "`n"
+
+        $ceMultiAssignmentBanner = @"
+    <div class="note-box" style="border-left:4px solid #f0ad4e;"><span class="note-icon">&#x26A0;&#xFE0F;</span><span>
+        <strong>Multi-Assignment Detected: $($ceInitiativeAssignments.Count) Cyber Essentials initiative assignments</strong>
+        <span style="margin-left:12px;font-size:0.85rem;">($ceEnforcedCount enforced, $ceAuditOnlyCount audit-only)</span>
+        <br><span style="font-size:0.85rem;color:var(--text-dim);">Compliance data is <strong>deduplicated</strong> using strictest-state-wins per resource &mdash; if any assignment reports a resource as non-compliant, it is treated as non-compliant regardless of other assignments. This prevents double-counting when scopes overlap.</span>
+        $perScopeCards
+    </span></div>
+"@
+    } else {
+        $isMultiAssignment = $false
     }
 
     # ── Build Policy Assignments rows (with category column) ──
@@ -3745,8 +3970,15 @@ $(if ($CEPTestResults.Count -gt 0) {
 @"
     <h3 class="sub-title">Cyber Essentials Plus &mdash; Test Results <span class="experimental-tag">Experimental</span></h3>
     <div class="note-box"><span class="note-icon">&#x26A0;&#xFE0F;</span><span><strong>Experimental Feature:</strong> CE / CE+ assessment is a community-developed, experimental feature. It is <strong>not an official Cyber Essentials certification test</strong> and should not be used as a substitute for professional CE/CE+ assessment. Results are indicative only.</span></div>
+    $ceMultiAssignmentBanner
+$(if (-not $isMultiAssignment) {
+@"
     <div class="note-box"><span class="note-icon">&#x1F4AC;</span><span><strong>Test Statuses:</strong> <span class="badge status-pass">PASS</span> = requirement met. <span class="badge status-fail">FAIL</span> = requirement not met, action needed. <span class="badge status-warn">WARN</span> = partial compliance, review recommended. <span class="badge status-skip">SKIP</span> = test could not run (data unavailable). <span class="badge status-manual">MANUAL</span> = requires human verification (cannot be automated).</span></div>
     $testSummaryCards
+"@
+})
+$(if (-not $isMultiAssignment) {
+@"
     <details>
         <summary>&#x1F9EA; CE+ Test Results Detail ($($CEPTestResults.Count) tests)</summary>
         <div class="details-content">
@@ -3759,11 +3991,13 @@ $(if ($CEPTestResults.Count -gt 0) {
         </div>
     </details>
 "@
+})
+"@
 } else {
     '<div class="callout callout-info"><span class="callout-icon">&#x2139;&#xFE0F;</span><div><strong>CE+ Tests Not Run</strong><p>Run with <code>-CEP Test</code> or <code>-CEP Full</code> to populate Cyber Essentials Plus test results.</p></div></div>'
 })
 
-$(if ($CEPExportData.Count -gt 0) {
+$(if ($CEPExportData.Count -gt 0 -and -not $isMultiAssignment) {
 @"
     <h3 class="sub-title">CE+ Control Group Compliance <span class="experimental-tag">Experimental</span></h3>
     <div class="legend">
@@ -3798,7 +4032,7 @@ $(if ($CEPExportData.Count -gt 0) {
         </div>
     </details>
 "@
-} else {
+} elseif ($CEPExportData.Count -eq 0) {
     '<div class="callout callout-info"><span class="callout-icon">&#x2139;&#xFE0F;</span><div><strong>CE+ Compliance Not Run</strong><p>Run with <code>-CEP Show</code> or <code>-CEP Full</code> to populate Cyber Essentials policy mapping.</p></div></div>'
 })
 </section>
@@ -4408,7 +4642,7 @@ function Invoke-CEPComplianceTests {
         
         # Cannot continue without the initiative
         Write-Host "`n   ❌ Cannot run remaining tests without the initiative definition." -ForegroundColor Red
-        return $testResults
+        return @{ TestResults = $testResults; PerScopeData = @(); PerScopeGroupData = @{}; PerScopeGroupRaw = @{}; RefIdToGroupDisplay = @{} }
     }
     
     $ceInitiativeName = $ceInitiative.Name
@@ -4450,8 +4684,18 @@ function Invoke-CEPComplianceTests {
             $enfTag = if ($a.enforcementMode -eq 'DoNotEnforce') { " (DoNotEnforce)" } else { "" }
             Write-Host "         • $($a.displayName)$enfTag — $($a.scopeType)" -ForegroundColor DarkGray
         }
+        if ($ceAssignments.Count -gt 1) {
+            $enforcedCount = @($ceAssignments | Where-Object { $_.enforcementMode -ne 'DoNotEnforce' }).Count
+            $auditOnlyCount = @($ceAssignments | Where-Object { $_.enforcementMode -eq 'DoNotEnforce' }).Count
+            Write-Host ""
+            Write-Host "         ℹ️  MULTI-ASSIGNMENT DETECTED: $($ceAssignments.Count) assignments found" -ForegroundColor Cyan
+            Write-Host "            Enforced: $enforcedCount | Audit-only (DoNotEnforce): $auditOnlyCount" -ForegroundColor Cyan
+            Write-Host "            Compliance data will be deduplicated using strictest-state-wins per resource." -ForegroundColor DarkGray
+            Write-Host "            This prevents double-counting when the same resource is evaluated by overlapping scopes." -ForegroundColor DarkGray
+        }
         $passCount++
-        Add-TestResult -TestId "T$testNumber" -ControlGroup "Prerequisites" -TestName "CE Initiative is Assigned" -Status "PASS" -Details "Assigned at $($ceAssignments.Count) scope(s)"
+        $multiAssignmentDetail = if ($ceAssignments.Count -gt 1) { " — Multi-assignment: compliance deduplicated (strictest-state-wins)" } else { "" }
+        Add-TestResult -TestId "T$testNumber" -ControlGroup "Prerequisites" -TestName "CE Initiative is Assigned" -Status "PASS" -Details "Assigned at $($ceAssignments.Count) scope(s)$multiAssignmentDetail"
     } else {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "         Initiative is not directly assigned. Will check individual policy coverage." -ForegroundColor Yellow
@@ -4628,7 +4872,11 @@ function Invoke-CEPComplianceTests {
     $complianceByAssignment = @{}
     if ($ceAssignments.Count -gt 0) {
         Write-Progress -Activity "CE Compliance Tests" -Status "Querying initiative compliance data..." -PercentComplete 91 -Id 20
-        Write-Host "   Querying per-policy compliance for initiative assignments..." -ForegroundColor Gray
+        if ($ceAssignments.Count -gt 1) {
+            Write-Host "   Querying per-policy compliance across $($ceAssignments.Count) initiative assignments (deduplicating overlapping resources)..." -ForegroundColor Gray
+        } else {
+            Write-Host "   Querying per-policy compliance for initiative assignments..." -ForegroundColor Gray
+        }
         $ceAssignmentIds = ($ceAssignments | Where-Object { $_.assignmentId } | ForEach-Object { "'$($_.assignmentId.ToLower())'" }) -join ', '
         
         if ($ceAssignmentIds) {
@@ -4642,6 +4890,13 @@ policyresources
     policyDefinitionReferenceId = tostring(properties.policyDefinitionReferenceId),
     complianceState = tostring(properties.complianceState),
     resourceId = tostring(properties.resourceId)
+| extend stateRank = case(
+    complianceState == 'NonCompliant', 1,
+    complianceState == 'Unknown', 2,
+    complianceState == 'Exempt', 3,
+    complianceState == 'Compliant', 4,
+    5)
+| summarize arg_min(stateRank, complianceState) by resourceId, policyDefinitionName, policyDefinitionReferenceId
 | summarize 
     TotalResources = dcount(resourceId),
     CompliantCount = dcountif(resourceId, complianceState == 'Compliant'),
@@ -4660,10 +4915,134 @@ policyresources
                         Total = $r.TotalResources
                     }
                 }
-                Write-Host "   ✓ Compliance data for $($compResults.Count) policies" -ForegroundColor Green
+                $dedupNote = if ($ceAssignments.Count -gt 1) { " (deduplicated across $($ceAssignments.Count) assignments)" } else { "" }
+                Write-Host "   ✓ Compliance data for $($compResults.Count) policies$dedupNote" -ForegroundColor Green
             } catch {
                 Write-Host "   ⚠️  Could not query compliance: $($_.Exception.Message)" -ForegroundColor Yellow
             }
+        }
+
+        # Per-assignment (per-scope) compliance breakdown — only when multiple assignments exist
+        $perScopeCompliance = @{}
+        if ($ceAssignments.Count -gt 1 -and $ceAssignmentIds) {
+            Write-Host "   Querying per-scope compliance breakdown..." -ForegroundColor Gray
+            $perScopeQuery = @"
+policyresources
+| where type == 'microsoft.policyinsights/policystates'
+| extend assignmentId = tolower(tostring(properties.policyAssignmentId))
+| where assignmentId in~ ($ceAssignmentIds)
+| extend 
+    complianceState = tostring(properties.complianceState),
+    resourceId = tostring(properties.resourceId)
+| extend stateRank = case(
+    complianceState == 'NonCompliant', 1,
+    complianceState == 'Unknown', 2,
+    complianceState == 'Exempt', 3,
+    complianceState == 'Compliant', 4,
+    5)
+| summarize arg_min(stateRank, complianceState) by resourceId, assignmentId
+| summarize 
+    TotalResources = dcount(resourceId),
+    CompliantCount = dcountif(resourceId, complianceState == 'Compliant'),
+    NonCompliantCount = dcountif(resourceId, complianceState == 'NonCompliant'),
+    ExemptCount = dcountif(resourceId, complianceState == 'Exempt')
+    by assignmentId
+"@
+            try {
+                $perScopeResults = @(Search-AzGraph -Query $perScopeQuery -First 1000 -UseTenantScope | Expand-AzGraphResult)
+                foreach ($psr in $perScopeResults) {
+                    $perScopeCompliance[$psr.assignmentId] = @{
+                        Total = $psr.TotalResources
+                        Compliant = $psr.CompliantCount
+                        NonCompliant = $psr.NonCompliantCount
+                        Exempt = $psr.ExemptCount
+                    }
+                }
+                Write-Host "   ✓ Per-scope compliance for $($perScopeResults.Count) assignments" -ForegroundColor Green
+            } catch {
+                Write-Host "   ⚠️  Could not query per-scope compliance: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+
+        # Per-scope per-policy-reference compliance — for control group bars per scope
+        $perScopeGroupRaw = @{}
+        if ($ceAssignmentIds) {
+            Write-Host "   Querying per-scope control group breakdown..." -ForegroundColor Gray
+            $perScopeGroupQuery = @"
+policyresources
+| where type == 'microsoft.policyinsights/policystates'
+| extend assignmentId = tolower(tostring(properties.policyAssignmentId))
+| where assignmentId in~ ($ceAssignmentIds)
+| extend 
+    policyDefinitionReferenceId = tostring(properties.policyDefinitionReferenceId),
+    complianceState = tostring(properties.complianceState),
+    resourceId = tostring(properties.resourceId)
+| summarize 
+    TotalResources = dcount(resourceId),
+    CompliantCount = dcountif(resourceId, complianceState == 'Compliant'),
+    NonCompliantCount = dcountif(resourceId, complianceState == 'NonCompliant'),
+    ExemptCount = dcountif(resourceId, complianceState == 'Exempt')
+    by assignmentId, policyDefinitionReferenceId
+"@
+            try {
+                $psgResults = @(Search-AzGraph -Query $perScopeGroupQuery -First 1000 -UseTenantScope | Expand-AzGraphResult)
+                foreach ($psg in $psgResults) {
+                    $aid = $psg.assignmentId
+                    if (-not $perScopeGroupRaw.ContainsKey($aid)) { $perScopeGroupRaw[$aid] = @{} }
+                    $perScopeGroupRaw[$aid][$psg.policyDefinitionReferenceId] = @{
+                        Compliant    = [int]$psg.CompliantCount
+                        NonCompliant = [int]$psg.NonCompliantCount
+                        Exempt       = [int]$psg.ExemptCount
+                        Total        = [int]$psg.TotalResources
+                    }
+                }
+                Write-Host "   ✓ Per-scope control group data for $($perScopeGroupRaw.Count) assignments ($($psgResults.Count) policy records)" -ForegroundColor Green
+            } catch {
+                Write-Host "   ⚠️  Could not query per-scope control group breakdown: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+
+        # Map policyDefinitionReferenceId → control group display name
+        $refIdToGroupName = @{}
+        foreach ($policyRef in $cePolicyDefinitions) {
+            $refId = if ($policyRef.policyDefinitionReferenceId) { $policyRef.policyDefinitionReferenceId } elseif ($policyRef.PolicyDefinitionReferenceId) { $policyRef.PolicyDefinitionReferenceId } else { $null }
+            $groups = if ($policyRef.groupNames) { @($policyRef.groupNames) } elseif ($policyRef.GroupNames) { @($policyRef.GroupNames) } else { @() }
+            if ($refId -and $groups.Count -gt 0) {
+                $refIdToGroupName[$refId] = $groups[0]
+            }
+        }
+        # Resolve group internal names to display names
+        $groupNameToDisplay = @{}
+        foreach ($gDef in $ceGroupDefinitions) {
+            $gN = if ($gDef.name) { $gDef.name } elseif ($gDef.Name) { $gDef.Name } else { '' }
+            $gD = if ($Global:CEPGroupFriendlyNames -and $Global:CEPGroupFriendlyNames[$gN]) { $Global:CEPGroupFriendlyNames[$gN] } elseif ($gDef.displayName -and $gDef.displayName -ne $gN) { $gDef.displayName } else { $gN }
+            if ($gN) { $groupNameToDisplay[$gN] = $gD }
+        }
+
+        # Aggregate per-assignment-per-group
+        $perScopeGroupData = @{}
+        foreach ($aid in $perScopeGroupRaw.Keys) {
+            $perScopeGroupData[$aid] = @{}
+            foreach ($refId in $perScopeGroupRaw[$aid].Keys) {
+                $groupInternalName = $refIdToGroupName[$refId]
+                if (-not $groupInternalName) { continue }
+                $groupDisplay = if ($groupNameToDisplay[$groupInternalName]) { $groupNameToDisplay[$groupInternalName] } else { $groupInternalName }
+                if (-not $perScopeGroupData[$aid].ContainsKey($groupDisplay)) {
+                    $perScopeGroupData[$aid][$groupDisplay] = @{ Compliant = 0; NonCompliant = 0; Exempt = 0; Total = 0 }
+                }
+                $d = $perScopeGroupRaw[$aid][$refId]
+                $perScopeGroupData[$aid][$groupDisplay].Compliant    += $d.Compliant
+                $perScopeGroupData[$aid][$groupDisplay].NonCompliant += $d.NonCompliant
+                $perScopeGroupData[$aid][$groupDisplay].Exempt       += $d.Exempt
+                $perScopeGroupData[$aid][$groupDisplay].Total        += $d.Total
+            }
+        }
+
+        # Build direct refId → display name mapping for HTML rendering
+        $refIdToGroupDisplay = @{}
+        foreach ($refId in $refIdToGroupName.Keys) {
+            $internalName = $refIdToGroupName[$refId]
+            $refIdToGroupDisplay[$refId] = if ($groupNameToDisplay[$internalName]) { $groupNameToDisplay[$internalName] } else { $internalName }
         }
     }
     
@@ -4696,6 +5075,13 @@ policyresources
 | extend 
     complianceState = tostring(properties.complianceState),
     resourceId = tostring(properties.resourceId)
+| extend stateRank = case(
+    complianceState == 'NonCompliant', 1,
+    complianceState == 'Unknown', 2,
+    complianceState == 'Exempt', 3,
+    complianceState == 'Compliant', 4,
+    5)
+| summarize arg_min(stateRank, complianceState) by resourceId, assignmentId
 | summarize 
     TotalResources = dcount(resourceId),
     CompliantCount = dcountif(resourceId, complianceState == 'Compliant'),
@@ -5521,6 +5907,38 @@ securityresources
     Write-Progress -Activity "CE Compliance Tests" -Completed -Id 20
     
     # ═══════════════════════════════════════════════════════
+    # PER-SCOPE COMPLIANCE BREAKDOWN (multi-assignment only)
+    # ═══════════════════════════════════════════════════════
+    if ($perScopeCompliance.Count -gt 0 -and $ceAssignments.Count -gt 1) {
+        Write-Host "   ───────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+        Write-Host "   PER-SCOPE COMPLIANCE BREAKDOWN" -ForegroundColor Cyan
+        Write-Host "   ───────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+        foreach ($a in $ceAssignments) {
+            $aid = $a.assignmentId.ToLower()
+            $scopeLabel = "$($a.displayName) ($($a.scopeType))"
+            $enfTag = if ($a.enforcementMode -eq 'DoNotEnforce') { " [Audit-only]" } else { " [Enforced]" }
+            if ($perScopeCompliance.ContainsKey($aid)) {
+                $psd = $perScopeCompliance[$aid]
+                $total = [int]$psd.Total
+                $compliant = [int]$psd.Compliant
+                $nonCompliant = [int]$psd.NonCompliant
+                $exempt = [int]$psd.Exempt
+                $pct = if ($total -gt 0) { [math]::Round(($compliant / $total) * 100, 1) } else { 0 }
+                $pctColor = if ($pct -ge 90) { "Green" } elseif ($pct -ge 50) { "Yellow" } else { "Red" }
+                Write-Host "     • $scopeLabel$enfTag" -ForegroundColor White
+                Write-Host "       Compliance: " -NoNewline -ForegroundColor Gray
+                Write-Host "$pct%" -NoNewline -ForegroundColor $pctColor
+                Write-Host " — $compliant compliant / $nonCompliant non-compliant / $exempt exempt (of $total)" -ForegroundColor Gray
+            } else {
+                Write-Host "     • $scopeLabel$enfTag" -ForegroundColor White
+                Write-Host "       Compliance: No data available" -ForegroundColor DarkGray
+            }
+        }
+        Write-Host "   ───────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
+        Write-Host ""
+    }
+
+    # ═══════════════════════════════════════════════════════
     # TEST SUMMARY
     # ═══════════════════════════════════════════════════════
     $totalTests = $passCount + $failCount + $warnCount + $skipCount + $manualCount
@@ -5576,7 +5994,33 @@ securityresources
     Write-Host "   Always verify results against Azure Portal > Policy > Compliance and work with an" -ForegroundColor Gray
     Write-Host "   accredited CE+ assessor for official certification." -ForegroundColor Gray
     
-    return $testResults
+    # Build per-scope data for HTML export
+    $perScopeData = @()
+    if ($perScopeCompliance.Count -gt 0 -and $ceAssignments.Count -gt 1) {
+        foreach ($a in $ceAssignments) {
+            $aid = $a.assignmentId.ToLower()
+            $psd = if ($perScopeCompliance.ContainsKey($aid)) { $perScopeCompliance[$aid] } else { $null }
+            $perScopeData += [PSCustomObject]@{
+                AssignmentId    = $aid
+                DisplayName     = $a.displayName
+                ScopeType       = $a.scopeType
+                EnforcementMode = $a.enforcementMode
+                Total           = if ($psd) { [int]$psd.Total } else { 0 }
+                Compliant       = if ($psd) { [int]$psd.Compliant } else { 0 }
+                NonCompliant    = if ($psd) { [int]$psd.NonCompliant } else { 0 }
+                Exempt          = if ($psd) { [int]$psd.Exempt } else { 0 }
+                CompliancePct   = if ($psd -and [int]$psd.Total -gt 0) { [math]::Round(([int]$psd.Compliant / [int]$psd.Total) * 100, 1) } else { 0 }
+            }
+        }
+    }
+
+    return @{
+        TestResults = $testResults
+        PerScopeData = $perScopeData
+        PerScopeGroupData = if ($perScopeGroupData) { $perScopeGroupData } else { @{} }
+        PerScopeGroupRaw = if ($perScopeGroupRaw) { $perScopeGroupRaw } else { @{} }
+        RefIdToGroupDisplay = if ($refIdToGroupDisplay) { $refIdToGroupDisplay } else { @{} }
+    }
 }
 
 #endregion CE/CE+ Test Functions
@@ -6970,6 +7414,8 @@ policyresources
 | extend assignmentId = tolower(tostring(properties.policyAssignmentId))
 | where assignmentId in~ ($matchedAssignmentIds)
 | extend complianceState = tostring(properties.complianceState), resourceId = tostring(properties.resourceId)
+| extend stateRank = case(complianceState == 'NonCompliant', 1, complianceState == 'Unknown', 2, complianceState == 'Exempt', 3, complianceState == 'Compliant', 4, 5)
+| summarize arg_min(stateRank, complianceState) by resourceId, assignmentId
 | summarize TotalResources = dcount(resourceId), CompliantCount = dcountif(resourceId, complianceState == 'Compliant'),
     NonCompliantCount = dcountif(resourceId, complianceState == 'NonCompliant'), ExemptCount = dcountif(resourceId, complianceState == 'Exempt')
     by assignmentId
@@ -7539,7 +7985,12 @@ $ncScopeFilter
 
 # Run CE/CE+ Compliance Tests if requested
 if ($RunCEPTests) {
-    $cepTestResults = Invoke-CEPComplianceTests -PolicyAssignments $argResults
+    $cepResult = Invoke-CEPComplianceTests -PolicyAssignments $argResults
+    $cepTestResults = if ($cepResult.TestResults) { $cepResult.TestResults } else { @() }
+    $cepPerScopeData = if ($cepResult.PerScopeData) { $cepResult.PerScopeData } else { @() }
+    $cepPerScopeGroupData = if ($cepResult.PerScopeGroupData) { $cepResult.PerScopeGroupData } else { @{} }
+    $cepPerScopeGroupRaw = if ($cepResult.PerScopeGroupRaw) { $cepResult.PerScopeGroupRaw } else { @{} }
+    $cepRefIdToGroupDisplay = if ($cepResult.RefIdToGroupDisplay) { $cepResult.RefIdToGroupDisplay } else { @{} }
     
     # Export test results if -ExportCEPCompliance is also specified
     if ($ExportCEPCompliance -and $cepTestResults -and $cepTestResults.Count -gt 0) {
@@ -7740,6 +8191,10 @@ $ncHtmlFilter
         -ComplianceData $htmlCompliance `
         -CEPExportData $(if ($cepExportData) { $cepExportData } else { @() }) `
         -CEPTestResults $(if ($cepTestResults) { $cepTestResults } else { @() }) `
+        -CEPPerScopeData $(if ($cepPerScopeData) { $cepPerScopeData } else { @() }) `
+        -CEPPerScopeGroupData $(if ($cepPerScopeGroupData) { $cepPerScopeGroupData } else { @{} }) `
+        -CEPPerScopeGroupRaw $(if ($cepPerScopeGroupRaw) { $cepPerScopeGroupRaw } else { @{} }) `
+        -CEPRefIdToGroupDisplay $(if ($cepRefIdToGroupDisplay) { $cepRefIdToGroupDisplay } else { @{} }) `
         -NCExportData $(if ($ncExportData) { $ncExportData } else { @() }) `
         -ExemptionData $(if ($exemptionData -and $exemptionData.Count -gt 0) { $exemptionData } else { @() }) `
         -TenantName $htmlTenantName `
@@ -7796,6 +8251,10 @@ if ($ExportYAML) {
         -ComplianceData $(if ($complianceData) { $complianceData } else { @{} }) `
         -CEPExportData $(if ($cepExportData) { $cepExportData } else { @() }) `
         -CEPTestResults $(if ($cepTestResults) { $cepTestResults } else { @() }) `
+        -CEPPerScopeData $(if ($cepPerScopeData) { $cepPerScopeData } else { @() }) `
+        -CEPPerScopeGroupData $(if ($cepPerScopeGroupData) { $cepPerScopeGroupData } else { @{} }) `
+        -CEPPerScopeGroupRaw $(if ($cepPerScopeGroupRaw) { $cepPerScopeGroupRaw } else { @{} }) `
+        -CEPRefIdToGroupDisplay $(if ($cepRefIdToGroupDisplay) { $cepRefIdToGroupDisplay } else { @{} }) `
         -NCExportData $(if ($ncExportData) { $ncExportData } else { @() }) `
         -ExemptionData $(if ($exemptionData -and $exemptionData.Count -gt 0) { $exemptionData } else { @() }) `
         -TenantId $yamlTenantId `

@@ -1,10 +1,26 @@
 {
-  "version": "3.0.2",
-  "releaseDate": "2026-02-19",
+  "version": "3.1.0",
+  "releaseDate": "2026-02-20",
   "minimumPowerShellVersion": "7.0",
   "releaseNotesUrl": "https://github.com/ripom/AzurePolicyAssessment/blob/main/CHANGELOG.md",
   "scriptUrl": "https://raw.githubusercontent.com/ripom/AzurePolicyAssessment/main/Get-PolicyAssignments.ps1",
   "history": [
+    {
+      "version": "3.1.0",
+      "releaseDate": "2026-02-20",
+      "highlights": [
+        "CE+ multi-assignment awareness: auto-detects initiative assigned at multiple scopes",
+        "CE+ ARG query deduplication: strictest-state-wins prevents double-counting across overlapping scopes",
+        "CE+ per-scope compliance breakdown: console and HTML report show compliance % per assignment scope with progress bars",
+        "CE+ per-scope collapsible cards: each assignment gets a card with control group bars, policy detail, test summary, and assignment info",
+        "CE+ per-scope control group bars: policy-level compliance bars per control group inside each scope card, consistent with standalone view",
+        "CE+ per-scope query dedup fix: Compliant + NonCompliant + Exempt = Total for each scope",
+        "CE+ multi-assignment banner in HTML report: lists all assignments, scopes, and enforcement modes",
+        "CE+ enhanced TEST 2: per-assignment scope and enforcement detail with overlap warnings",
+        "CE+ per-scope YAML export: cepPerScopeCompliance section in YAML database for multi-assignment environments",
+        "Display: simplified update banner and success box — horizontal lines only, no vertical borders"
+      ]
+    },
     {
       "version": "3.0.2",
       "releaseDate": "2026-02-19",
