@@ -1,6 +1,6 @@
 # Azure Policy Assignments Assessment Script
 
-**Version 3.1.1** | [View Changelog](CHANGELOG.md) | [What's New](WHATS-NEW-v3.0.md)
+**Version 3.2.0** | [View Changelog](CHANGELOG.md) | [What's New](WHATS-NEW-v3.0.md) | [AI Guide](AI-INTEGRATION-GUIDE.md)
 
 > **Author**: This project is made and maintained by **Riccardo Pomato**.
 >
@@ -139,6 +139,16 @@ See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
 
 - **`-Full`**: Runs a comprehensive assessment with all features enabled (equivalent to `-Output All -CEP Full`).
 
+- **`-AI`** (`Off`, `Summary`, `Full`): Controls the optional AI narrative layer powered by GitHub Copilot (GitHub Models).
+  - `Off` — No AI processing (default). Fully deterministic output.
+  - `Summary` — AI executive insight: posture, top drivers, prioritised actions.
+  - `Full` — Summary + detailed per-policy remediation steps, compliance gaps, framework alignment.
+  - Requires a GitHub token with `Models: read` permission. Usage follows GitHub Models billing and rate limits. See [AI-INTEGRATION-GUIDE.md](AI-INTEGRATION-GUIDE.md).
+
+- **`-AIKey`**: GitHub Personal Access Token for GitHub Models API. Can also be set via `GITHUB_TOKEN` environment variable.
+
+- **`-AIModel`**: GitHub Models catalog ID (default: `openai/gpt-4.1`). IDs use the `publisher/model` format; consult the current GitHub Models catalog.
+
 - **`-Update`**: Self-update switch. Downloads the latest version of the script from GitHub, validates it has no parse errors, creates a backup of the current version (e.g., `Get-PolicyAssignments-v3.0.0-backup.ps1`), replaces the local script file, and exits so you can re-run with the new version. No Azure login required.
 
 ### Example Output
@@ -188,12 +198,58 @@ Deploy-ASC-Monitoring    Deploy Azure Security...  Initiative  Management Group 
 Deploy-MDFC-OssDb        Deploy Microsoft Defen... Policy      Management Group Platform             mg-platform         Deploy-MDFC-OssDb
 ```
 
+### Current Output vs AI-Augmented Output
+
+The script today is **deterministic** (rule-based scoring + exact Azure data).
+An optional future AI mode can add narrative interpretation while keeping your computed metrics as the source of truth.
+
+| Aspect | Current Output (No AI) | AI-Augmented Output (Optional) |
+|---|---|---|
+| Data source | Azure Resource Graph + script logic | Same data + AI narrative layer |
+| Assignment metrics | ✅ Exact counts and values | ✅ Same exact counts and values |
+| Recommendations | Fixed rule-based text per policy/effect | Context-aware prioritized actions across multiple signals |
+| Trend explanation | Manual interpretation of delta metrics | Automatic explanation of likely drivers and impact |
+| Consistency | Fully deterministic run-to-run | Deterministic metrics + controlled AI text (schema + temperature 0) |
+| Dependency | No external AI service | Requires AI endpoint/API key |
+| Risk profile | No hallucination risk | Low but non-zero narrative risk (mitigated by validation) |
+
+**Without AI (current):**
+
+```text
+EXECUTIVE SUMMARY
+- Assignments: 412 (290 Policy | 95 Initiative | 27 Regulatory)
+- Non-Compliant: 1,284 resources across 73 assignments
+- Enforcement: 331 enforced | 81 audit-only
+- High-Security Policies NOT Enforced: 14
+- Top Non-Compliant Assignments: <top 10 list>
+```
+
+**With AI (optional future mode):**
+
+```text
+AI EXECUTIVE INSIGHTS
+- Posture: Needs Improvement (confidence: high)
+- Main drivers:
+  1) 14 high-security policies in DoNotEnforce
+  2) +182 non-compliant resources vs previous snapshot
+  3) Regression concentrated in 2 subscriptions
+- Prioritized actions (7-day plan):
+  P1) Enforce top 5 high-security audit-only assignments
+  P1) Remediate top 3 Deny failures
+  P2) Review exemptions expiring in <30 days
+```
+
+> Recommended model for production use: keep scoring/compliance calculations deterministic, and use AI only for summarization, prioritization, and remediation narrative.
+
+👉 **Full guide with examples, prerequisites, and architecture**: see [AI-INTEGRATION-GUIDE.md](AI-INTEGRATION-GUIDE.md)
+
 ---
 
 ## Overview
 
 This PowerShell script analyzes Azure Policy assignments across all management groups in an Azure tenant. It retrieves policy assignments directly assigned to each management group, excluding inherited policies from parent management groups, providing a clear view of the policy governance structure.
 
+**NEW in v3.2**: AI Executive Insights via GitHub Copilot — framework-aware analysis, compliance gaps, prioritised actions! Enhanced recommendation engine with 11 trigger categories!
 **NEW in v3.1**: Multi-assignment Cyber Essentials Plus support — automatic deduplication when the same initiative is assigned at multiple scopes!  
 **NEW in v3.0**: Simplified CLI (`-Output`, `-CEP`), real policy metadata, CE+ v3.2 test specification (TC1–TC5), Quick Assess mode, delta/trending!  
 **IMPORTANT**: This script is specifically designed for and optimized for **Azure Landing Zone (ALZ) management group structures**. All recommendations and gap analysis are based on the standard ALZ architecture. The script will work with any management group hierarchy, but the policy recommendations are most meaningful when applied to an ALZ-compliant structure.
@@ -228,6 +284,20 @@ Tenant Root Group
 - Without an ALZ structure, many recommendations may not be applicable to your environment
 
 ## What's New
+
+### 🤖 v3.2: AI Executive Insights & Recommendation Engine Overhaul
+
+- 🤖 **AI Executive Insights**: Optional `-AI Summary|Full` powered by GitHub Copilot (GitHub Models) — free with Copilot subscription
+- 📊 **Framework-Aware Analysis**: AI evaluates against Azure Landing Zone (80% coverage benchmark), CIS/NIST security baselines, and Well-Architected Framework
+- 🚨 **Compliance Gap Analysis**: AI identifies specific findings with risk ratings and framework references
+- 📐 **Framework Alignment Cards**: Visual assessment of ALZ, Security Baseline, and Well-Architected alignment in HTML report
+- 🎯 **Enhanced Recommendations**: 11 trigger categories (up from 5) — broken DINE remediation, ALZ gaps, cost review, medium-security enforcement gaps
+- 📋 **Lowered NC Threshold**: Any non-compliant resources now generate recommendations (previously required >10)
+- 🔧 **3-Tier JSON Fallback**: Resilient AI response parsing handles malformed LLM output gracefully
+- 💰 **Cost-Specific Analysis**: AI names each high-cost policy with enforcement mode, estimated cost impact, and budget recommendations
+- 📝 **Compliance-Specific Analysis**: AI names each NC assignment with compliance rates, broken remediation detection, and category breakdown
+
+See [AI-INTEGRATION-GUIDE.md](AI-INTEGRATION-GUIDE.md) for setup and examples.
 
 ### 🚀 v3.0: Major Release — Complete Interface Overhaul
 
@@ -440,6 +510,18 @@ Review the console output to identify where policies are actually assigned.
 7. **Azure Landing Zone Validation**: Compare deployed policies against ALZ recommendations
 8. **Risk Assessment**: Identify high-risk policy configurations and enforcement gaps
 
+## Regression Tests
+
+The tracked Pester 5 regression suite runs offline and does not require an Azure login, GitHub token, or network access. It validates script syntax, release consistency, GitHub Models configuration, versioned ALZ source contracts, framework evidence semantics, CE+/DINE wording, and assignment metadata.
+
+```powershell
+# One-time prerequisite
+Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser
+
+# Run the regression suite
+Invoke-Pester -Path .\tests\Get-PolicyAssignments.Regression.Tests.ps1 -Output Detailed
+```
+
 ## Limitations
 
 - **Scope**: All scopes (Management Groups, Subscriptions, Resource Groups) are assessed by default. Use `-ManagementGroup` or `-Subscription` to filter.
@@ -451,6 +533,7 @@ Review the console output to identify where policies are actually assigned.
 
 ## Version History
 
+- **v3.2.0**: AI Executive Insights plus official-source refresh for versioned ALZ assets, current GitHub Models API, Azure-discovered framework initiatives, and evidence-based CE+/DINE semantics.
 - **v3.1.1**: Bug fix — YAML/HTML/console numeric fields now handle "N/A" values gracefully instead of failing with Int32 conversion errors.
 - **v3.1.0**: Multi-assignment Cyber Essentials Plus — automatic detection of initiative assignments at multiple scopes, strictest-state-wins deduplication preventing double-counting, HTML report multi-assignment banner with per-assignment enforcement detail.
 - **v3.0.0**: Major release — simplified CLI, real policy metadata, CE+ v3.2 tests, Quick Assess, YAML delta/trending, exemptions, Landing Zone Analysis in HTML report, enhanced anti-patterns, control type balance, scoring accuracy fixes, updated attribution. See [WHATS-NEW-v3.0.md](WHATS-NEW-v3.0.md).

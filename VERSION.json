@@ -1,10 +1,30 @@
 {
-  "version": "3.1.1",
-  "releaseDate": "2026-02-20",
+  "version": "3.2.0",
+  "releaseDate": "2026-07-15",
   "minimumPowerShellVersion": "7.0",
   "releaseNotesUrl": "https://github.com/ripom/AzurePolicyAssessment/blob/main/CHANGELOG.md",
   "scriptUrl": "https://raw.githubusercontent.com/ripom/AzurePolicyAssessment/main/Get-PolicyAssignments.ps1",
   "history": [
+    {
+      "version": "3.2.0",
+      "releaseDate": "2026-07-15",
+      "highlights": [
+        "Official ALZ release discovery with policyDefinitionId-based matching and source version reporting",
+        "Current GitHub Models REST endpoint, publisher/model IDs, and Models: read permission",
+        "Official Azure built-in initiative discovery replaces inferred CIS, NIST, ISO, and MCSB coverage",
+        "CE+ percentage is now a tool indicator rather than a certification threshold",
+        "DINE non-compliance now requires remediation task and identity verification",
+        "AI Executive Insights: optional LLM-powered analysis via GitHub Models",
+        "New -AI parameter (Off|Summary|Full) for executive narrative, compliance gaps, framework alignment, and prioritised actions",
+        "AI interprets Azure Landing Zone inventory and assigned framework evidence without unsupported target ratios",
+        "AI section in HTML report with topic-grouped summary, compliance gaps table, framework alignment cards, and action plan",
+        "AI section in YAML database export for offline analysis",
+        "Recommendation engine overhaul: 11 trigger categories, lower NC threshold, ALZ gap items, DINE remediation review, and cost review",
+        "30-60-90 roadmap now generates Critical and High items for environments with any NC resources, enforcement gaps, or ALZ misalignment",
+        "Deduplication in recommendations prevents duplicate actions from multiple triggers",
+        "3-tier JSON parse fallback in AI response handling (standard, trailing-comma repair, regex extraction)"
+      ]
+    },
     {
       "version": "3.1.1",
       "releaseDate": "2026-02-20",

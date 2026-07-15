@@ -5,6 +5,50 @@ All notable changes to the Azure Policy & Compliance Assessment Tool will be doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-07-15
+
+### Changed — Official Sources and Evidence Semantics
+- ALZ coverage now resolves the latest official CalVer release, parses assignment assets, records the source version, and matches Azure assignments by `policyDefinitionId`.
+- GitHub Models now uses `models.github.ai`, `publisher/model` IDs, documented REST headers, and `Models: read` token permission.
+- CIS, NIST, ISO, and MCSB are no longer inferred from generic effect counts. Unassigned frameworks are shown as `Not measured`; available built-ins are discovered from Azure Resource Graph metadata.
+- CE+ percentages are explicitly tool indicators, not certification thresholds. Independent assessment remains required.
+- DINE/Modify non-compliance is marked for remediation-state verification instead of being declared broken without task or identity evidence.
+- Azure assignment results now include definition version, creation timestamp, identity type, exclusions, resource selectors, and overrides.
+
+### 🤖 AI Executive Insights — GitHub Copilot Integration
+
+#### Added — AI-Powered Analysis
+- **`-AI` parameter** (`Off|Summary|Full`): Optional AI narrative layer powered by GitHub Copilot (GitHub Models). AI receives only pre-computed metrics — never raw resource IDs or subscription names.
+- **`-AIKey`**: GitHub Personal Access Token for authentication. Also reads `GITHUB_TOKEN` environment variable.
+- **`-AIModel`**: GitHub Models catalog ID (default: `openai/gpt-4.1`) using the `publisher/model` format.
+- **Framework-aware analysis**: AI interprets ALZ inventory coverage and assigned framework evidence without treating opinionated ratios as official targets.
+- **Topic-grouped situation summary**: AI narrative auto-split into consolidated sections — Overall Posture, Landing Zone Alignment, Security & Control Balance, Compliance & Remediation, Scope Architecture, Cost Governance, Exemptions, Key Risks.
+- **Compliance gap analysis**: AI identifies specific compliance findings with risk ratings and framework references.
+- **Framework alignment assessment**: Rates ALZ alignment (Aligned/Partially Aligned/Not Aligned), Security Baseline (Strong/Moderate/Weak), and Well-Architected (Good/Needs Work/Poor).
+- **Prioritised action plan**: P1 (immediate) / P2 (this week) / P3 (this month) with specific policy names, scopes, and expected outcomes.
+- **Console display**: Structured output with posture badge, topic-grouped paragraphs, risk driver cards, bordered action table with timeline labels.
+- **HTML report section**: New “AI Executive Insights” section with nav link, KPI cards, topic-grouped summary with color-coded borders, driver flex cards, action plan table, compliance gaps table, and framework alignment cards.
+- **YAML export**: `aiInsights` node with full structured AI output for offline analysis.
+- **3-tier JSON parse fallback**: Standard parse → trailing-comma repair → regex field extraction. Handles malformed AI responses gracefully.
+- **Non-blocking**: If AI call fails or times out (30s), the script continues with deterministic output. No impact on existing functionality.
+
+#### Added — Prerequisite
+- Requires a GitHub token with **`Models: read`** permission.
+- Usage follows the current GitHub Models billing, quota, and rate-limit terms. See [AI-INTEGRATION-GUIDE.md](AI-INTEGRATION-GUIDE.md) for setup.
+
+### 🛠️ Recommendation Engine Overhaul
+
+#### Changed — 30-60-90 Day Roadmap
+- **11 recommendation trigger categories** (up from 5): Enforcement Gap, High-Risk NC, Non-Compliance, Remediation Review, Medium-Security Enforcement, ALZ Gap, ALZ Enforcement, Cost Optimisation, CE+ Compliance, Coverage Gap, Housekeeping.
+- **Lowered NC threshold**: Any assignment with >0 non-compliant resources now generates a High-priority item (previously required >10).
+- **DINE remediation review**: DINE/Modify non-compliance triggers verification of remediation tasks, evaluation timing, scope, and assignment identity permissions.
+- **ALZ gap integration**: Missing ALZ policies grouped by category generate High-priority items with specific policy names.
+- **ALZ DoNotEnforce enforcement**: ALZ recommended policies in audit-only mode generate High-priority items.
+- **Cost review items**: Enforced high-cost DINE policies flagged for budget review.
+- **Medium-security enforcement gaps**: DoNotEnforce policies with Medium security impact + High/Medium risk now generate items.
+- **High-risk NC remediation**: Enforced high-risk policies with active non-compliance generate Critical items.
+- **Deduplication**: Same action text only appears once (keeps highest priority).
+
 ## [3.1.1] - 2026-02-20
 
 ### 🐛 Bug Fix — N/A Numeric Conversion
