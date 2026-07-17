@@ -1,6 +1,6 @@
 # Azure Policy Assignments Assessment Script
 
-**Version 3.2.0** | [View Changelog](CHANGELOG.md) | [What's New](WHATS-NEW-v3.0.md) | [AI Guide](AI-INTEGRATION-GUIDE.md)
+**Version 4.0.0** | [View Changelog](CHANGELOG.md) | [What's New](WHATS-NEW-v4.0.md)
 
 > **Author**: This project is made and maintained by **Riccardo Pomato**.
 >
@@ -50,6 +50,7 @@ The account running the script needs:
 - **Reader** access or higher on management groups
 - **Reader** access on policy assignments
 - Typically requires at least **Management Group Reader** role at the tenant root level
+- **Cost Management Reader** on the selected subscription when `-CostEvidence CostManagement` or `All` is used
 - **Note**: Azure Resource Graph queries respect existing RBAC permissions automatically
 
 **Permission Errors**: If you encounter permission errors, the script will provide specific guidance on required roles. Contact your Azure administrator to grant appropriate access.
@@ -102,6 +103,13 @@ See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
 
    # Compare against a previous YAML snapshot
    .\Get-PolicyAssignments.ps1 -DeltaYAML ".\PolicyAssessment_20260218.yaml" -Output HTML
+
+   # Add current official unit-price records for explicitly named services
+   .\Get-PolicyAssignments.ps1 -Output HTML -CostEvidence RetailPrices `
+       -CostRegion westeurope -CostCurrency EUR -CostServiceName 'Azure Monitor'
+
+   # Add actual subscription costs for the previous 30 days
+   .\Get-PolicyAssignments.ps1 -Output HTML -CostEvidence CostManagement -CostLookbackDays 30
    ```
 
 3. **Select a tenant** when prompted (if you have access to multiple tenants and didn't specify -TenantId)
@@ -125,6 +133,19 @@ See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
   - `Export` — Export CE compliance data to CSV
   - `Full` — All of the above
 
+- **`-CostEvidence`** (`Off`, `RetailPrices`, `CostManagement`, `All`): Adds optional official monetary evidence to the HTML cost-governance section. Default: `Off`.
+  - `RetailPrices` requires `-CostRegion` and one or more exact `-CostServiceName` values. Records are current unit prices, not workload estimates.
+  - `CostManagement` queries actual cost for the resolved subscription over `-CostLookbackDays` (default 30).
+  - Every displayed amount includes official source, region, currency, price or cost date, and retrieval timestamp. Incomplete records are discarded.
+- **`-CostCurrency`**: Three-letter ISO currency for Retail Prices API requests. Default: `USD`.
+- **`-CostRegion`**: ARM region for Retail Prices API filtering, for example `westeurope`.
+- **`-CostServiceName`**: One or more exact Retail Prices API service names. Services and SKUs are never inferred from policy names.
+- **`-CostLookbackDays`**: Cost Management actual-cost period from 1 to 365 days. Default: 30.
+
+- **`-CEPDefinitionId`**: Optional policy set definition ID or GUID to pin the CE mapping source. ID matching takes precedence over display-name matching.
+
+- **`-CEPDefinitionVersion`**: CE mapping version used for the exact display-name fallback (`UK NCSC Cyber Essentials v<version>`). Defaults to `3.1`.
+
 - **`-ManagementGroup`**: Filter the assessment to a specific Management Group by name or ID.
 
 - **`-Subscription`**: Filter the assessment to a specific Subscription by name or ID.
@@ -139,15 +160,7 @@ See [OUTPUT-OPTIONS.md](OUTPUT-OPTIONS.md) for detailed examples.
 
 - **`-Full`**: Runs a comprehensive assessment with all features enabled (equivalent to `-Output All -CEP Full`).
 
-- **`-AI`** (`Off`, `Summary`, `Full`): Controls the optional AI narrative layer powered by GitHub Copilot (GitHub Models).
-  - `Off` — No AI processing (default). Fully deterministic output.
-  - `Summary` — AI executive insight: posture, top drivers, prioritised actions.
-  - `Full` — Summary + detailed per-policy remediation steps, compliance gaps, framework alignment.
-  - Requires a GitHub token with `Models: read` permission. Usage follows GitHub Models billing and rate limits. See [AI-INTEGRATION-GUIDE.md](AI-INTEGRATION-GUIDE.md).
-
-- **`-AIKey`**: GitHub Personal Access Token for GitHub Models API. Can also be set via `GITHUB_TOKEN` environment variable.
-
-- **`-AIModel`**: GitHub Models catalog ID (default: `openai/gpt-4.1`). IDs use the `publisher/model` format; consult the current GitHub Models catalog.
+All findings, actions, scores, console output, and exports are generated deterministically from collected Azure evidence and script rules. The script has no external generative-analysis dependency and requires no model credentials.
 
 - **`-Update`**: Self-update switch. Downloads the latest version of the script from GitHub, validates it has no parse errors, creates a backup of the current version (e.g., `Get-PolicyAssignments-v3.0.0-backup.ps1`), replaces the local script file, and exits so you can re-run with the new version. No Azure login required.
 
@@ -198,22 +211,9 @@ Deploy-ASC-Monitoring    Deploy Azure Security...  Initiative  Management Group 
 Deploy-MDFC-OssDb        Deploy Microsoft Defen... Policy      Management Group Platform             mg-platform         Deploy-MDFC-OssDb
 ```
 
-### Current Output vs AI-Augmented Output
+### Deterministic Assessment Output
 
-The script today is **deterministic** (rule-based scoring + exact Azure data).
-An optional future AI mode can add narrative interpretation while keeping your computed metrics as the source of truth.
-
-| Aspect | Current Output (No AI) | AI-Augmented Output (Optional) |
-|---|---|---|
-| Data source | Azure Resource Graph + script logic | Same data + AI narrative layer |
-| Assignment metrics | ✅ Exact counts and values | ✅ Same exact counts and values |
-| Recommendations | Fixed rule-based text per policy/effect | Context-aware prioritized actions across multiple signals |
-| Trend explanation | Manual interpretation of delta metrics | Automatic explanation of likely drivers and impact |
-| Consistency | Fully deterministic run-to-run | Deterministic metrics + controlled AI text (schema + temperature 0) |
-| Dependency | No external AI service | Requires AI endpoint/API key |
-| Risk profile | No hallucination risk | Low but non-zero narrative risk (mitigated by validation) |
-
-**Without AI (current):**
+The script uses rule-based scoring and exact Azure evidence. Findings and actions include stable IDs, source and confidence metadata, and verification steps that remain consistent across console, HTML, YAML, and roadmap output.
 
 ```text
 EXECUTIVE SUMMARY
@@ -224,32 +224,13 @@ EXECUTIVE SUMMARY
 - Top Non-Compliant Assignments: <top 10 list>
 ```
 
-**With AI (optional future mode):**
-
-```text
-AI EXECUTIVE INSIGHTS
-- Posture: Needs Improvement (confidence: high)
-- Main drivers:
-  1) 14 high-security policies in DoNotEnforce
-  2) +182 non-compliant resources vs previous snapshot
-  3) Regression concentrated in 2 subscriptions
-- Prioritized actions (7-day plan):
-  P1) Enforce top 5 high-security audit-only assignments
-  P1) Remediate top 3 Deny failures
-  P2) Review exemptions expiring in <30 days
-```
-
-> Recommended model for production use: keep scoring/compliance calculations deterministic, and use AI only for summarization, prioritization, and remediation narrative.
-
-👉 **Full guide with examples, prerequisites, and architecture**: see [AI-INTEGRATION-GUIDE.md](AI-INTEGRATION-GUIDE.md)
-
 ---
 
 ## Overview
 
 This PowerShell script analyzes Azure Policy assignments across all management groups in an Azure tenant. It retrieves policy assignments directly assigned to each management group, excluding inherited policies from parent management groups, providing a clear view of the policy governance structure.
 
-**NEW in v3.2**: AI Executive Insights via GitHub Copilot — framework-aware analysis, compliance gaps, prioritised actions! Enhanced recommendation engine with 11 trigger categories!
+**Current operation**: Deterministic assessment findings, linked recommendations, HTML audience views, YAML snapshots, and optional delta analysis with no generative-analysis dependency.
 **NEW in v3.1**: Multi-assignment Cyber Essentials Plus support — automatic deduplication when the same initiative is assigned at multiple scopes!  
 **NEW in v3.0**: Simplified CLI (`-Output`, `-CEP`), real policy metadata, CE+ v3.2 test specification (TC1–TC5), Quick Assess mode, delta/trending!  
 **IMPORTANT**: This script is specifically designed for and optimized for **Azure Landing Zone (ALZ) management group structures**. All recommendations and gap analysis are based on the standard ALZ architecture. The script will work with any management group hierarchy, but the policy recommendations are most meaningful when applied to an ALZ-compliant structure.
@@ -285,19 +266,16 @@ Tenant Root Group
 
 ## What's New
 
-### 🤖 v3.2: AI Executive Insights & Recommendation Engine Overhaul
+### v4.0: Deterministic Assessment and Audience-Focused Reporting
 
-- 🤖 **AI Executive Insights**: Optional `-AI Summary|Full` powered by GitHub Copilot (GitHub Models) — free with Copilot subscription
-- 📊 **Framework-Aware Analysis**: AI evaluates against Azure Landing Zone (80% coverage benchmark), CIS/NIST security baselines, and Well-Architected Framework
-- 🚨 **Compliance Gap Analysis**: AI identifies specific findings with risk ratings and framework references
-- 📐 **Framework Alignment Cards**: Visual assessment of ALZ, Security Baseline, and Well-Architected alignment in HTML report
-- 🎯 **Enhanced Recommendations**: 11 trigger categories (up from 5) — broken DINE remediation, ALZ gaps, cost review, medium-security enforcement gaps
+- 🧭 **Audience Pages**: The single HTML report behaves like an application with Summary, CSA / Architect, Engineer, Evidence, and Methodology pages. Each section is generated directly with its final audience group; client-side hash routing only changes which group is visible.
+- 📚 **Progressive Disclosure**: Summary contains executive conclusions only: assessment outcome, current exposure, evidence status, measured results for assigned compliance initiatives and Landing Zone assets, aggregated priority risks and actions, consequences of action or inaction, and leadership decisions. It excludes assigned but unevaluated standards and does not present assignment ratios as compliance scores. CSA owns design analysis for scope placement, inheritance, control balance, coverage, governance, ALZ, and cost. Engineer owns actionable finding, assignment, resource, enforcement-gap, security-priority, and remediation inventories. Evidence contains assessment provenance and optional snapshot change records.
+- 🔢 **Explicit Metric Semantics**: Similar-looking severity counts are labelled by object: Critical Findings, High-Risk Initiative Assignments, and Critical Remediation Actions are separate populations and must not be compared as one total.
+- 📱 **Responsive Evidence Tables**: Wide technical tables scroll inside their own containers without widening the report on mobile.
+- 🎯 **Enhanced Recommendations**: evidence-backed DINE task and permission findings, ALZ gaps, cost review, and enforcement gaps
 - 📋 **Lowered NC Threshold**: Any non-compliant resources now generate recommendations (previously required >10)
-- 🔧 **3-Tier JSON Fallback**: Resilient AI response parsing handles malformed LLM output gracefully
-- 💰 **Cost-Specific Analysis**: AI names each high-cost policy with enforcement mode, estimated cost impact, and budget recommendations
-- 📝 **Compliance-Specific Analysis**: AI names each NC assignment with compliance rates, broken remediation detection, and category breakdown
-
-See [AI-INTEGRATION-GUIDE.md](AI-INTEGRATION-GUIDE.md) for setup and examples.
+- 💰 **Cost-Specific Analysis**: Deterministic findings identify policies with heuristic cost exposure and direct monetary validation to official pricing and actual-cost evidence
+- 📝 **Compliance-Specific Analysis**: Deterministic compliance and remediation states avoid unsupported task-health conclusions
 
 ### 🚀 v3.0: Major Release — Complete Interface Overhaul
 
@@ -317,7 +295,7 @@ See [AI-INTEGRATION-GUIDE.md](AI-INTEGRATION-GUIDE.md) for setup and examples.
 - ⚠️ **Enhanced Anti-Patterns**: Expandable cards with granular detail and Microsoft docs references
 - 👤 **Attribution**: Project credited to Riccardo Pomato
 
-See [WHATS-NEW-v3.0.md](WHATS-NEW-v3.0.md) for full details.
+See [WHATS-NEW-v4.0.md](WHATS-NEW-v4.0.md) for full v4.0 details. The historical v3.0 notes remain available in [WHATS-NEW-v3.0.md](WHATS-NEW-v3.0.md).
 ## Features
 
 ### Performance (NEW in v2.1)
@@ -403,7 +381,7 @@ if ($assignment.Scope -eq "/providers/Microsoft.Management/managementGroups/$($m
 
 **Location**: Current directory
 
-**Columns included**: All policy details including Assignment Name, Display Name, Policy Type, Effect Type, Enforcement Mode, Security Impact, Cost Impact, Compliance Impact, Operational Overhead, Risk Level, Scope details, Parameters
+**Columns included**: All policy details including Assignment Name, Display Name, Policy Type, Effect Type, Enforcement Mode, Security Impact, Cost Exposure, Compliance Impact, Operational Overhead, Risk Level, Scope details, Parameters
 
 **Examples**:
 ```powershell
@@ -442,7 +420,12 @@ The script assesses your environment against UK Cyber Essentials Plus (CE+) requ
 
 # Full CE+ assessment
 .\Get-PolicyAssignments.ps1 -CEP Full
+
+# Pin a known policy set definition ID and expected mapping version
+.\Get-PolicyAssignments.ps1 -CEP Full -CEPDefinitionId '<policy-set-definition-id>' -CEPDefinitionVersion '3.1'
 ```
+
+Source discovery uses the configured definition ID first, then an exact versioned display name. If neither resolves, the report lists candidate Cyber Essentials definitions and distinguishes renamed, retired-or-unavailable, unavailable, and discovery-failed states. A missing source does not imply incorrect tenant configuration.
 
 **See also**: [Cyber Essentials Plus Documentation](CYBER-ESSENTIALS-PLUS.md)
 
@@ -509,10 +492,11 @@ Review the console output to identify where policies are actually assigned.
 6. **Impact Analysis**: Evaluate cost, security, and compliance impact of current policy assignments
 7. **Azure Landing Zone Validation**: Compare deployed policies against ALZ recommendations
 8. **Risk Assessment**: Identify high-risk policy configurations and enforcement gaps
+9. **Remediation Operations**: Review latest task state, errors, applicable resources, evaluation time, identity roles, and assignment scope controls without inferring success or failure from non-compliance alone
 
 ## Regression Tests
 
-The tracked Pester 5 regression suite runs offline and does not require an Azure login, GitHub token, or network access. It validates script syntax, release consistency, GitHub Models configuration, versioned ALZ source contracts, framework evidence semantics, CE+/DINE wording, and assignment metadata.
+The tracked Pester 5 regression suite runs offline and does not require an Azure login or network access. It validates script syntax, release consistency, deterministic report output, versioned ALZ source contracts, framework evidence semantics, CE+/DINE wording, remediation evidence states, and assignment metadata.
 
 ```powershell
 # One-time prerequisite
@@ -533,7 +517,8 @@ Invoke-Pester -Path .\tests\Get-PolicyAssignments.Regression.Tests.ps1 -Output D
 
 ## Version History
 
-- **v3.2.0**: AI Executive Insights plus official-source refresh for versioned ALZ assets, current GitHub Models API, Azure-discovered framework initiatives, and evidence-based CE+/DINE semantics.
+- **v4.0.0**: Major deterministic-only release. Removes generative AI dependencies, combines Overview and Executive into an outcome-led Summary, introduces five directly rendered audience pages, separates design analysis from actionable inventory, and adds measured compliance and Landing Zone results with responsive progressive disclosure. See [WHATS-NEW-v4.0.md](WHATS-NEW-v4.0.md).
+- **v3.2.0**: Deterministic findings and reporting plus official-source refresh for versioned ALZ assets, Azure-discovered framework initiatives, and evidence-based CE+/DINE semantics. The experimental generative AI integration was removed.
 - **v3.1.1**: Bug fix — YAML/HTML/console numeric fields now handle "N/A" values gracefully instead of failing with Int32 conversion errors.
 - **v3.1.0**: Multi-assignment Cyber Essentials Plus — automatic detection of initiative assignments at multiple scopes, strictest-state-wins deduplication preventing double-counting, HTML report multi-assignment banner with per-assignment enforcement detail.
 - **v3.0.0**: Major release — simplified CLI, real policy metadata, CE+ v3.2 tests, Quick Assess, YAML delta/trending, exemptions, Landing Zone Analysis in HTML report, enhanced anti-patterns, control type balance, scoring accuracy fixes, updated attribution. See [WHATS-NEW-v3.0.md](WHATS-NEW-v3.0.md).

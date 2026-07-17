@@ -5,6 +5,30 @@ All notable changes to the Azure Policy & Compliance Assessment Tool will be doc
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [4.0.0] - 2026-07-17
+
+### Removed — Generative AI Integration
+- Removed all GitHub Models parameters, provider configuration, prompt construction, HTTP calls, response validation, console insights, HTML sections, and YAML `aiInsights` output.
+- Removed the AI integration guide and AI-specific regression tests.
+
+### Changed — Deterministic-Only Operation
+- Console, HTML, YAML, roadmap, framework, cost, compliance, remediation, ALZ, CEP, and delta outputs now use only collected Azure evidence and deterministic script rules.
+- The assessment no longer requires model credentials, GitHub Models access, or a generative-analysis service.
+- HTML reports now combine the former Overview and Executive pages into one Summary page, preserving decision context while removing repeated posture, risk, resource, and action metrics.
+- Engineer now contains the technical assignment/resource inventory alongside security and remediation; Evidence is focused on assessment provenance and optional snapshot changes.
+- Report sections are now emitted with their final audience group in the HTML. Hash routing changes visibility only; the previous JavaScript DOM relocation layer and intermediate host containers were removed.
+- The report header uses roughly 40% less vertical space, aligns title and subtitle in one compact row, and keeps metadata on a single overflow-safe line across desktop and mobile.
+- Global assessment KPIs now appear once in Summary. CSA, Engineer, and Evidence use audience-specific metrics, while Summary retains decision context without repeating numeric card matrices.
+- Summary now presents five executive measures only: assessment outcome, affected resources, affected subscriptions, critical findings, and evidence status. Assignment ratios are no longer shown as compliance-like percentages.
+- Summary now includes an aggregated result for every assigned initiative with evaluated policy states, plus measured Azure Landing Zone coverage and CE+ results. Assigned but unevaluated standards are excluded rather than inferred.
+- Summary explicitly separates what is happening, the consequences of inaction, the targeted effect of action, and the decisions required from leadership. Claimed improvement remains conditional on subsequent Azure Policy evaluation.
+- Summary Top Findings groups repeated subscription-scoped non-compliance by assignment display name, showing subscription and affected-resource totals while detailed evidence retains each assignment.
+- Summary now contains executive conclusions only. Scope, effect, category, coverage, governance, ALZ, and cost design analysis belongs to CSA; prioritised findings, assignment/resource records, enforcement gaps, security priorities, and remediation evidence belong to Engineer.
+- Engineer `Key Findings & Risks` is now a collapsible panel that starts closed, keeping detailed deterministic findings available without expanding the initial action view.
+- README, output options, Cyber Essentials guidance, version manifest, inline help, and dedicated v4.0 release notes now describe the same deterministic-only CLI, audience architecture, and evidence semantics.
+
 ## [3.2.0] - 2026-07-15
 
 ### Changed — Official Sources and Evidence Semantics
@@ -14,11 +38,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CE+ percentages are explicitly tool indicators, not certification thresholds. Independent assessment remains required.
 - DINE/Modify non-compliance is marked for remediation-state verification instead of being declared broken without task or identity evidence.
 - Azure assignment results now include definition version, creation timestamp, identity type, exclusions, resource selectors, and overrides.
+- Remediation evidence now correlates assignment identity, required and assigned roles, latest task state and errors, last policy evaluation, applicable resources, exemptions, `notScopes`, selectors, and overrides.
+- Deterministic findings distinguish `NotStarted`, `Failed`, `Pending`, `MissingPermissions`, and `NotAssessed`; query failure never becomes a working or broken remediation conclusion.
+- HTML, YAML, and AI inputs expose the same evidence-backed state. AI consistency checks reject unsupported success, failure, pending, permission, and remediation-health claims.
+- AI input is now a compact deterministic finding/action ledger plus execution context rather than a disconnected metric matrix.
+- Risk drivers, compliance gaps, and actions require existing finding IDs. Post-validation rejects unknown IDs and unsupported policy/scope names, numbers, severity, and sources before rendering.
+- `Summary` and `Full` now use distinct prompts, schemas, and renderers: Summary returns 250–350 words, 3 linked drivers, 3 linked actions, and data quality; Full returns 600–1000 words plus finding-by-finding operational analyses and snapshot-aware trend.
+- Full operational analyses copy evidence ID, prerequisites, operational risk, verification, and rollback from deterministic finding plans. Missing, reordered, altered, or invented operational content is rejected.
+- Full AI requests are now bounded to seven deterministic actions and their linked findings, with compact CEP references and capped evidence arrays. This prevents GitHub Models `413 Payload Too Large` failures after operational plans were added.
+- `-AIModel` now provides Tab completion for compatible GitHub Models, including `openai/gpt-5-mini`, with short usage descriptions while continuing to accept future or private `publisher/model` IDs.
+- AI requests now enforce model-aware GitHub token-tier budgets before every HTTP call: GPT-5-family bodies are limited to 10 KiB, standard models to 24 KiB, and generated output to 3,500 tokens. Oversized initial requests reduce their selected deterministic evidence, while consistency retries no longer duplicate the complete findings corpus.
+- GPT-5-family requests now use the reasoning-model Chat Completions contract (`max_completion_tokens` with no `temperature`) instead of unsupported standard sampling parameters that caused HTTP 400 responses.
+- Added `-AIOrganization` for organisation-attributed GitHub Models inference and `-AIUsageTier Paid` for explicitly enabled production billing profiles with larger local input/output budgets.
+- Personal paid usage now has an explicit PAT-only contract: when `-AIOrganization` is omitted, `GITHUB_TOKEN` identifies the billed personal account without requiring a GitHub login parameter.
+- Paid-profile requests rejected with GitHub's `tokens_limit_reached` 413 response now retry once using the compatible 4,000-token profile instead of discarding AI insights immediately.
+- Expanded GitHub Models documentation with separate personal and organisation/Enterprise paid-usage setup, secure PAT examples, endpoint attribution, portal prerequisites, and clarification that Copilot licensing is billed separately.
+- AI narratives now use a pre-generation domain-entity whitelist derived from finding titles, action titles, assessment statuses, risk levels, and framework names in the compact payload; sentences requiring an unknown domain entity must be omitted.
+- AI execution prints request bytes and selected finding/action counts; HTML-generation fallback messages include the sanitized provider failure state instead of only reporting that insights are unavailable.
+- Console, HTML, and YAML preserve the mode-specific AI sections; HTML uses collapsible finding analyses for progressive disclosure.
+- HTML reports now use six application-style audience pages: Overview, Executive, CSA / Architect, Engineer, Evidence, and Methodology. Client-side hash routing keeps one page visible at a time in the same self-contained file.
+- Every audience page has an always-visible decision summary sized for the first desktop and mobile viewport. Existing sections are relocated without data loss; detailed findings, assignments, resources, exemptions, ALZ, delta, AI, and methodology remain expandable.
+- Executive now owns the deterministic summary and optional AI synthesis, and leads with current exposure, impact of inaction, and leadership decisions. Engineer contains security and remediation; Evidence is limited to traceable technical inventory and optional snapshot changes.
+- Ambiguous `Critical Initiatives` and `Critical Queue` labels were replaced with explicit populations: `Critical Findings`, `High-Risk Initiative Assignments`, and `Critical Remediation Actions`.
+- The Overview no longer presents assignment coverage as a compliance score: it shows the exact `assignments without observed non-compliance / assignments in scope` ratio and percentage. Aggregate `At Risk` is labelled as a tool risk indicator with its high-risk-assignment and affected-resource basis.
+- Collapsed section summaries now expose relevant counts and status instead of title-only labels. Deep links open the owning audience page and the complete disclosure chain.
+- Methodology, limitations, glossary, large evidence tables, and remediation operational evidence use native nested `<details>` levels; print output expands all evidence.
+- Mobile navigation remains a single horizontal strip, and responsive grid constraints keep wide tables inside their own scroll containers.
 
 ### 🤖 AI Executive Insights — GitHub Copilot Integration
 
 #### Added — AI-Powered Analysis
-- **`-AI` parameter** (`Off|Summary|Full`): Optional AI narrative layer powered by GitHub Copilot (GitHub Models). AI receives only pre-computed metrics — never raw resource IDs or subscription names.
+- **`-AI` parameter** (`Off|Summary|Full`): Optional AI narrative layer powered by GitHub Copilot (GitHub Models). AI receives selected deterministic findings/actions and minimal execution context; unsupported output is discarded.
 - **`-AIKey`**: GitHub Personal Access Token for authentication. Also reads `GITHUB_TOKEN` environment variable.
 - **`-AIModel`**: GitHub Models catalog ID (default: `openai/gpt-4.1`) using the `publisher/model` format.
 - **Framework-aware analysis**: AI interprets ALZ inventory coverage and assigned framework evidence without treating opinionated ratios as official targets.
@@ -34,14 +84,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Added — Prerequisite
 - Requires a GitHub token with **`Models: read`** permission.
-- Usage follows the current GitHub Models billing, quota, and rate-limit terms. See [AI-INTEGRATION-GUIDE.md](AI-INTEGRATION-GUIDE.md) for setup.
+- Usage followed the GitHub Models billing, quota, and rate-limit terms in this release.
 
 ### 🛠️ Recommendation Engine Overhaul
 
 #### Changed — 30-60-90 Day Roadmap
 - **11 recommendation trigger categories** (up from 5): Enforcement Gap, High-Risk NC, Non-Compliance, Remediation Review, Medium-Security Enforcement, ALZ Gap, ALZ Enforcement, Cost Optimisation, CE+ Compliance, Coverage Gap, Housekeeping.
 - **Lowered NC threshold**: Any assignment with >0 non-compliant resources now generates a High-priority item (previously required >10).
-- **DINE remediation review**: DINE/Modify non-compliance triggers verification of remediation tasks, evaluation timing, scope, and assignment identity permissions.
+- **DINE remediation evidence**: DINE/Modify assignments use explicit task, evaluation, scope, identity, and role evidence; non-compliance alone does not establish remediation state.
 - **ALZ gap integration**: Missing ALZ policies grouped by category generate High-priority items with specific policy names.
 - **ALZ DoNotEnforce enforcement**: ALZ recommended policies in audit-only mode generate High-priority items.
 - **Cost review items**: Enforced high-cost DINE policies flagged for budget review.
@@ -139,10 +189,10 @@ This release consolidates all changes from v2.3 through v2.6 into a single major
 | Sentinel - Configure VMs to run Azure Monitor Agent | Low / Low / Low | **Medium / High / High** |
 
 #### Enhanced — Report Legends & Documentation
-- **Cost & Overhead Legend**: Added real-world cost examples (Defender ~$15/server/month, Log Analytics ~$2.76/GB), explained parameterised initiative scoring
+- **Cost & Overhead Legend**: Added qualitative exposure examples and parameterised initiative scoring; static price examples were later removed in favour of sourced current evidence
 - **Security Legend**: Added parameterised initiative scoring explanation with category-based inference
 - **Calculation details**: Updated "How are Cost/Security calculated?" panels with new Parameterised × Category signal row
-- **Glossary**: Cost Impact and Operational Overhead entries now include full scoring formulas and parameterised initiative handling
+- **Glossary**: Cost Exposure and Operational Overhead entries describe qualitative signals and parameterised initiative handling
 
 ### 📋 Policy Exemptions, YAML Database & Enhanced Architecture Insights
 
@@ -444,7 +494,7 @@ The `-ExportCEPCompliance` generates a CSV with:
 
 - **Recommendations Engine**:
   - Security impact classification
-  - Cost impact assessment
+  - Cost exposure assessment
   - Compliance impact evaluation
   - Operational overhead analysis
   - Actionable recommendations per policy

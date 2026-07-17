@@ -28,7 +28,7 @@ The CE & CE+ compliance checks and tests in this tool are based on the following
 
 The Cyber Essentials (CE) & CE+ compliance assessment feature uses the **built-in "UK NCSC Cyber Essentials v3.1" Azure Policy Initiative** (policy set definition) to evaluate your Azure environment against CE requirements. This provides accurate, Microsoft-maintained mappings of CE controls to Azure policies.
 
-Additionally, the **`-CEP Test`** parameter (or legacy **`-RunCEPTests`** switch) executes automated tests based on the **[NCSC Cyber Essentials Plus v3.2 Test Specification](https://www.ncsc.gov.uk/files/cyber-essentials-plus-test-specification-v3-2.pdf)**, mapping the official test cases (TC1–TC5) to Azure Resource Graph queries where automatable, and flagging manual/physical subtests for the assessor.
+Additionally, **`-CEP Test`** executes automated tests based on the **[NCSC Cyber Essentials Plus v3.2 Test Specification](https://www.ncsc.gov.uk/files/cyber-essentials-plus-test-specification-v3-2.pdf)**, mapping the official test cases (TC1–TC5) to Azure Resource Graph queries where automatable, and flagging manual or physical subtests for the assessor.
 
 **What This Tool Provides**: Initiative-based CE compliance assessment, gap analysis, and automated CE+ v3.2 test execution to help identify potential policy and configuration gaps against CE & CE+ requirements.
 
@@ -64,7 +64,7 @@ Additionally, the **`-CEP Test`** parameter (or legacy **`-RunCEPTests`** switch
 
 ## CE/CE+ Compliance Approach
 
-### Initiative-Based Assessment (`-ShowCEPCompliance`)
+### Initiative-Based Assessment (`-CEP Show`)
 
 The tool uses the **built-in "UK NCSC Cyber Essentials v3.1" Azure Policy Initiative** rather than static policy name matching. This provides:
 
@@ -81,9 +81,9 @@ The tool uses the **built-in "UK NCSC Cyber Essentials v3.1" Azure Policy Initia
 | **5. Patch Management** | `Cyber_Essentials_v3.1_5` | System updates, vulnerability remediation |
 | **General Requirements** | `Cyber_Essentials_v3.1_` | Cross-cutting requirements |
 
-### CE+ v3.2 Test Specification (`-RunCEPTests`)
+### CE+ v3.2 Test Specification (`-CEP Test`)
 
-When `-RunCEPTests` is specified, the tool executes two phases of testing:
+When `-CEP Test` or `-CEP Full` is specified, the tool executes two phases of testing:
 
 #### Phase 1 — Initiative Compliance Tests (T1–T5+)
 
@@ -113,52 +113,36 @@ Based on the [NCSC CE+ v3.2 Test Specification](https://www.ncsc.gov.uk/files/cy
 
 ## How to Use
 
-> **Note**: Since v3.0.0, the new `-CEP` parameter is the recommended interface. Legacy switches (`-ShowCEPCompliance`, `-RunCEPTests`, `-ExportCEPCompliance`) still work for backward compatibility.
+Version 4.0 uses the single `-CEP` parameter. The former `-ShowCEPCompliance`, `-RunCEPTests`, and `-ExportCEPCompliance` command-line switches have been removed.
 
 ### Show CE Compliance (Initiative-Based)
 ```powershell
-# New way (recommended)
 .\Get-PolicyAssignments.ps1 -CEP Show
-
-# Legacy way (still works)
-.\Get-PolicyAssignments.ps1 -ShowCEPCompliance
 ```
 
 ### Run CE+ v3.2 Test Specification
 ```powershell
-# New way (recommended)
 .\Get-PolicyAssignments.ps1 -CEP Test
-
-# Legacy way (still works)
-.\Get-PolicyAssignments.ps1 -RunCEPTests
 ```
 
 ### Export CE Compliance to CSV
 ```powershell
-# New way (recommended)
 .\Get-PolicyAssignments.ps1 -CEP Export
-
-# Legacy way (still works)
-.\Get-PolicyAssignments.ps1 -ExportCEPCompliance
 ```
 
 ### Combined Usage
 ```powershell
-# Full CE+ assessment (new way)
 .\Get-PolicyAssignments.ps1 -CEP Full
-
-# Legacy way (still works)
-.\Get-PolicyAssignments.ps1 -ShowRecommendations -RunCEPTests -ExportCEPCompliance
 ```
 
 ### Parameter Summary
 
-| New (v3.0+) | Legacy (still works) | Description |
-|---|---|---|
-| `-CEP Show` | `-ShowCEPCompliance` | Shows CE initiative compliance grouped by control area |
-| `-CEP Test` | `-RunCEPTests` | Runs Phase 1 (initiative tests T1-T5+) and Phase 2 (v3.2 spec TC1-TC5). Implies Show |
-| `-CEP Export` | `-ExportCEPCompliance` | Exports CE compliance data to CSV. Implies Show |
-| `-CEP Full` | All three switches | All of the above |
+| Value | Description |
+|---|---|
+| `-CEP Show` | Shows CE initiative compliance grouped by control area |
+| `-CEP Test` | Runs Phase 1 (initiative tests T1-T5+) and Phase 2 (v3.2 specification TC1-TC5); implies Show |
+| `-CEP Export` | Exports CE compliance data to CSV; implies Show |
+| `-CEP Full` | Enables Show, Test, and Export |
 
 **Output File**: `CyberEssentialsPlus_Compliance_YYYYMMDD_HHMMSS.csv`
 
@@ -178,7 +162,7 @@ Based on the [NCSC CE+ v3.2 Test Specification](https://www.ncsc.gov.uk/files/cy
 
 ## Interpreting Results
 
-### CE Compliance Output (`-ShowCEPCompliance`)
+### CE Compliance Output (`-CEP Show`)
 
 ```
 🇬🇧 CYBER ESSENTIALS COMPLIANCE (Initiative-Based):
@@ -196,7 +180,7 @@ Based on the [NCSC CE+ v3.2 Test Specification](https://www.ncsc.gov.uk/files/cy
       Compliance Score: 83.3%
 ```
 
-### CE+ v3.2 Test Results (`-RunCEPTests`)
+### CE+ v3.2 Test Results (`-CEP Test`)
 
 ```
 ═══════════════════════════════════════════════════════════════
@@ -233,13 +217,9 @@ Based on the [NCSC CE+ v3.2 Test Specification](https://www.ncsc.gov.uk/files/cy
 | **SKIP** | Test skipped (e.g., prerequisite not met) |
 | **MANUAL** | Requires physical/interactive verification by assessor |
 
-### Compliance Score Interpretation
+### Automated Tool Indicator
 
-| Score | Color | Interpretation |
-|---|---|---|
-| **80-100%** | 🟢 Green | Strong CE alignment |
-| **50-79%** | 🟡 Yellow | Moderate coverage, gaps exist |
-| **0-49%** | 🔴 Red | Significant gaps, action required |
+When measured, the CE+ percentage is calculated only from automated technical PASS and FAIL verdicts. Warnings, skipped checks, and manual procedures remain visible separately. The percentage is not a certification threshold, does not establish CE/CE+ compliance, and must be interpreted with the detailed evidence and an independent assessment.
 
 ---
 
@@ -260,7 +240,7 @@ The initiative must be **assigned** at an appropriate scope (management group, s
 ### 3. Compliance Evaluation Delay
 Azure Policy compliance evaluation is **not instantaneous**. New assignments may take up to 24 hours for initial evaluation.
 
-**Mitigation**: Use `-RunCEPTests` which can trigger an on-demand scan (Test T3), though this also takes time.
+**Mitigation**: Use `-CEP Test`, which can trigger an on-demand scan (Test T3), though the resulting policy evaluation can still take time.
 
 ### 4. Manual/Physical Test Cases
 The CE+ v3.2 test specification includes subtests that **cannot be automated** via Azure:
@@ -313,8 +293,8 @@ Potential future enhancements:
 - [x] CE+ v3.2 test specification automated checks TC1-TC5 (v3.0.0)
 - [x] MANUAL test flagging for assessor completion (v3.0.0)
 - [x] Exemption awareness and scope coverage analysis (v3.0.0)
-- [ ] HTML report generation with test evidence
-- [ ] Integration with Microsoft Defender for Cloud recommendations
+- [x] HTML report generation with test evidence
+- [x] Integration with Microsoft Defender for Cloud assessment evidence
 - [ ] CE/CE+ certification readiness checklist / scorecard
 - [ ] Support for future NCSC test specification versions
 
@@ -341,7 +321,7 @@ Potential future enhancements:
 - Azure Resource Graph access for the v3.2 test specification queries
 
 ### Q: Can I run just the v3.2 test specification without the initiative compliance?
-**A:** No. `-RunCEPTests` runs both Phase 1 (initiative compliance) and Phase 2 (v3.2 test specification) together. Phase 1 results inform Phase 2 context.
+**A:** No. `-CEP Test` runs both Phase 1 (initiative compliance) and Phase 2 (v3.2 test specification) together. Phase 1 results inform Phase 2 context.
 
 ### Q: Is this tool officially supported by Microsoft or NCSC?
 **A:** No. This is a **community tool** for guidance purposes. It is not endorsed by Microsoft or the UK National Cyber Security Centre.
@@ -367,6 +347,7 @@ Potential future enhancements:
 
 | Version | Date | Changes |
 |---|---|---|
+| 4.0.0 | 2026-07-17 | Deterministic-only reporting, measured CE+ result semantics, audience-focused HTML report, and removal of legacy CE+ command-line switches |
 | 3.1.1 | 2026-02-20 | Bug fix: numeric fields handle "N/A" values gracefully (Int32 conversion fix) |
 | 3.1.0 | 2026-02-20 | Multi-assignment awareness, strictest-state-wins deduplication, per-scope compliance breakdown, per-scope control group bars, per-scope policy detail and test summary cards |
 | 3.0.0 | 2026-02-19 | Policy exemptions support, Landing Zone Analysis in HTML report, `-CEP` parameter, YAML delta |
@@ -375,7 +356,7 @@ Potential future enhancements:
 
 ---
 
-**Last Updated**: February 20, 2026  
-**Script Version**: 3.1.1  
-**Status**: Experimental - Feedback Welcome 🙏  
+**Last Updated**: July 17, 2026
+**Script Version**: 4.0.0
+**Status**: Experimental - Feedback Welcome
 **Based on**: [NCSC CE+ v3.2 Test Specification](https://www.ncsc.gov.uk/files/cyber-essentials-plus-test-specification-v3-2.pdf) | [Azure CE+ Compliance Offering](https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus)

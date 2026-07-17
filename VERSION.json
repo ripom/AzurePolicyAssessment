@@ -1,10 +1,26 @@
 {
-  "version": "3.2.0",
-  "releaseDate": "2026-07-15",
+  "version": "4.0.0",
+  "releaseDate": "2026-07-17",
   "minimumPowerShellVersion": "7.0",
   "releaseNotesUrl": "https://github.com/ripom/AzurePolicyAssessment/blob/main/CHANGELOG.md",
   "scriptUrl": "https://raw.githubusercontent.com/ripom/AzurePolicyAssessment/main/Get-PolicyAssignments.ps1",
   "history": [
+    {
+      "version": "4.0.0",
+      "releaseDate": "2026-07-17",
+      "highlights": [
+        "Removed the generative AI integration, model credentials, provider calls, and AI-generated outputs",
+        "Combined Overview and Executive into one outcome-led Summary for leadership",
+        "Introduced five directly rendered audience pages: Summary, CSA / Architect, Engineer, Evidence, and Methodology",
+        "Separated architecture analysis, actionable inventories, provenance, and methodology by audience ownership",
+        "Added explicit executive narratives for current state, consequences of inaction, expected effect of action, and leadership decisions",
+        "Added measured compliance initiative and Azure Landing Zone results to a collapsed Summary disclosure",
+        "Removed ambiguous assignment percentages and repeated global KPI matrices",
+        "Grouped repeated subscription findings while retaining assignment-level evidence in Engineer",
+        "Compacted the report header and improved responsive desktop and mobile layouts",
+        "Made detailed findings and compliance results collapsible and closed by default"
+      ]
+    },
     {
       "version": "3.2.0",
       "releaseDate": "2026-07-15",

@@ -72,10 +72,10 @@ Fixes a systemic scoring blind spot where **parameterised initiatives** (Defende
 
 ### 📊 Enhanced Report Legends
 
-- **Cost & Overhead Legend**: Real-world cost examples (Defender ~$15/server/month, Log Analytics ~$2.76/GB), parameterised initiative explanation
+- **Cost & Overhead Legend**: Qualitative exposure examples and parameterised initiative explanation; current prices require official sourced evidence
 - **Security Legend**: Explains how parameterised initiatives are scored by category + name keywords
 - **Calculation panels**: New "Parameterised × Category" signal row in the scoring methodology tables
-- **Glossary**: Cost Impact and Operational Overhead entries now include full scoring formulas
+- **Glossary**: Cost Exposure and Operational Overhead entries describe qualitative classification signals
 
 ### 📋 Policy Exemptions
 

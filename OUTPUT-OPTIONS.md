@@ -1,19 +1,22 @@
 # Output Options - Quick Reference
 
-**Version 3.1.1** | [View Changelog](CHANGELOG.md)
+**Version 4.0.0** | [View Changelog](CHANGELOG.md) | [What's New](WHATS-NEW-v4.0.md)
 
-## 📋 NEW in v3.0: YAML Database, Exemptions & Delta Comparison
+## Current Output Model
 
 - `-Output YAML` exports a complete assessment database (assignments, compliance, exemptions, CE+ results)
 - `-DeltaYAML <path>` compares against a previous YAML snapshot for change tracking
-- Policy exemptions are automatically queried and displayed in the Engineering Report
-- Enhanced anti-patterns with expandable detail and Microsoft docs references
+- `-Output HTML` creates the five-page audience report: Summary, CSA / Architect, Engineer, Evidence, and Methodology
+- Policy exemptions and actionable records are displayed in Engineer; collection provenance and snapshot changes are displayed in Evidence
+- Findings and recommendations are deterministic and require no model credentials
 
-## 🇨🇵 Cyber Essentials Plus Compliance
+## Cyber Essentials Plus Assessment
 
-Experimental feature mapping CE+ requirements to Azure policies!
-- `-ExportCEPCompliance` parameter for CSV export
-- Gap analysis and compliance scoring
+Experimental feature mapping CE+ requirements to Azure policies:
+- `-CEP Show` displays initiative-based CE evidence
+- `-CEP Test` runs the mapped automated and manual CE+ test workflow
+- `-CEP Export` exports CE evidence to CSV
+- `-CEP Full` enables display, tests, and export
 - See [CYBER-ESSENTIALS-PLUS.md](CYBER-ESSENTIALS-PLUS.md) for details
 
 ## 🚀 v2.1: Lightning-Fast Performance
@@ -171,7 +174,7 @@ Start
   - Non-Compliant Resources
   - Non-Compliant Policies
   - Security Impact
-  - Cost Impact
+  - Cost Exposure
   - Compliance Impact
   - Operational Overhead
   - Risk Level
@@ -183,7 +186,7 @@ Start
 
 ### Custom Filename
 ```powershell
-.\Get-PolicyAssignments.ps1 -Export -FileName "MyPolicyReport.csv"
+.\Get-PolicyAssignments.ps1 -Output CSV -FileName "MyPolicyReport.csv"
 ```
 
 ## Progress Tracking
@@ -215,11 +218,7 @@ Only subscriptions from the current authenticated tenant are processed, preventi
 
 ## Compliance Data
 
-All scopes include accurate compliance data:
-- **Non-Compliant Resources**: Matches Azure Portal exactly
-- **Non-Compliant Policies**: Accurate count for Initiatives
-
-Compliance data is fetched using `PolicyAssignmentName` filter for reliability.
+Compliance results are point-in-time evidence collected through Azure Resource Graph and Azure Policy state queries. The report distinguishes evaluated, not evaluated, and unavailable states; failed or missing queries cannot produce a positive posture conclusion. Azure Policy evaluation can be delayed, so validate material findings against the Azure Policy portal and rerun after remediation.
 
 ## Tips
 

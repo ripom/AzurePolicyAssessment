@@ -85,43 +85,21 @@
     so you can re-run with the new version.
     Use: .\Get-PolicyAssignments.ps1 -Update
 
-.PARAMETER AI
-    Controls the optional AI narrative layer powered by GitHub Copilot (GitHub Models).
-    Accepts: Off, Summary, Full.
-      Off     — No AI processing (default). Fully deterministic output.
-      Summary — Generates an AI executive insight: posture, top drivers, prioritized actions.
-      Full    — Summary + detailed per-policy remediation steps and trend interpretation.
-    AI receives ONLY pre-computed metrics (never raw resource IDs). All numbers in the
-    AI output are validated against computed assessment data. If the AI call fails or
-    times out, the script continues with deterministic output (non-blocking).
-    Requires a GitHub token with Models read permission via -AIKey or
-    GITHUB_TOKEN environment variable. Usage is subject to GitHub Models
-    billing and rate limits for the account or organisation.
-    See AI-INTEGRATION-GUIDE.md for full documentation.
+.PARAMETER CostEvidence
+    Optional official monetary evidence. Accepts Off, RetailPrices, CostManagement, or All.
+    RetailPrices requires -CostRegion and at least one -CostServiceName. CostManagement
+    queries actual cost for the resolved subscription. Monetary values are omitted when
+    source provenance is incomplete.
 
-.PARAMETER AIKey
-    GitHub Personal Access Token (PAT) for GitHub Models API.
-    Can also be set via the GITHUB_TOKEN environment variable.
-    Fine-grained tokens require the Models: read permission.
-    Generate at: GitHub.com → Settings → Developer settings → Personal access tokens.
+.PARAMETER CostRegion
+    Azure ARM region used to filter Retail Prices API records, for example westeurope.
 
-.PARAMETER AIModel
-    GitHub Models catalog ID (default: openai/gpt-4.1).
-    Model IDs use the publisher/model format. See the current catalog:
-    https://github.com/marketplace/models
+.PARAMETER CostCurrency
+    ISO 4217 currency requested from the Retail Prices API. Default: USD.
 
-.EXAMPLE
-    .\Get-PolicyAssignments.ps1 -AI Summary
-    Runs assessment with AI executive insights (uses GITHUB_TOKEN env var).
-
-.EXAMPLE
-    $env:GITHUB_TOKEN = "ghp_xxxx"
-    .\Get-PolicyAssignments.ps1 -AI Full -Output HTML
-    Full AI analysis with GitHub Copilot, outputs HTML report with AI section.
-
-.EXAMPLE
-    .\Get-PolicyAssignments.ps1 -AI Summary -AIKey "github_pat_xxxx" -AIModel openai/gpt-4.1
-    AI insights using a specific key and lower-cost model.
+.PARAMETER CostServiceName
+    One or more exact Azure Retail Prices API service names. The script does not infer
+    billable SKUs or services from policy names.
 
 .EXAMPLE
     .\Get-PolicyAssignments.ps1
@@ -178,16 +156,14 @@
     Exports YAML database and shows detailed delta against a previous assessment.
 
 .NOTES
-    Version: 3.2.0
-    Last Updated: July 15, 2026
+    Version: 4.0.0
+    Last Updated: July 17, 2026
     Author: Riccardo Pomato
     
     Requires PowerShell 7.0 or later (Windows PowerShell 5.1 is not supported)
     Requires Azure PowerShell modules: Az.Accounts, Az.Resources, Az.ResourceGraph
     Requires appropriate Azure RBAC permissions (typically Management Group Reader)
     For compliance data, policies must be assigned and evaluated (may take time for new assignments)
-    AI features require a GitHub token with Models: read permission (see AI-INTEGRATION-GUIDE.md)
-    
     Performance: Uses Azure Resource Graph for fast queries (10-50x faster than traditional enumeration)
     
     CE/CE+ Reference Documentation:
@@ -195,12 +171,15 @@
     - Azure CE+ Compliance Offering    : https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus
     
     Version History:
-    - 3.2.0 (2026-07-15): AI integration and official-source refresh.
-                          • New -AI parameter (Off|Summary|Full) for executive insights + remediation plans.
-                          • Uses the current GitHub Models REST endpoint and publisher/model IDs.
-                          • AI output validated against computed metrics; deterministic fallback on failure.
-                          • AI insights section in HTML report and YAML database export.
-                          • New parameters: -AI, -AIKey, -AIModel.
+    - 4.0.0 (2026-07-17): Deterministic-only reporting and audience architecture redesign.
+                          • Removed the generative AI integration and credential requirements.
+                          • Unified Overview and Executive into an outcome-led Summary.
+                          • Added five direct audience pages with explicit content ownership.
+                          • Added measured compliance and Landing Zone results to Summary.
+                          • Reworked responsive disclosure, KPI, finding, and action presentation.
+    - 3.2.0 (2026-07-15): Deterministic assessment and official-source refresh.
+                          • Findings, recommendations, and reports are generated from collected evidence and rules.
+                          • No external generative-analysis service or model credentials are required.
                           • Versioned ALZ release assets with definition-ID matching.
                           • Framework initiatives discovered from official Azure metadata.
                           • CE+ percentage is a tool indicator, not a certification threshold.
@@ -255,6 +234,13 @@ param(
     [string]$CEP,
 
     [Parameter(Mandatory=$false)]
+    [string]$CEPDefinitionId = '',
+
+    [Parameter(Mandatory=$false)]
+    [ValidateNotNullOrEmpty()]
+    [string]$CEPDefinitionVersion = '3.1',
+
+    [Parameter(Mandatory=$false)]
     [string]$ManagementGroup,
 
     [Parameter(Mandatory=$false)]
@@ -278,16 +264,23 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$DeltaYAML,
 
-    # ── AI integration parameters (GitHub Copilot / GitHub Models) ──
     [Parameter(Mandatory=$false)]
-    [ValidateSet('Off', 'Summary', 'Full')]
-    [string]$AI = 'Off',
+    [ValidateSet('Off', 'RetailPrices', 'CostManagement', 'All')]
+    [string]$CostEvidence = 'Off',
 
     [Parameter(Mandatory=$false)]
-    [string]$AIKey,
+    [string]$CostRegion = '',
 
     [Parameter(Mandatory=$false)]
-    [string]$AIModel = 'openai/gpt-4.1',
+    [ValidatePattern('^[A-Za-z]{3}$')]
+    [string]$CostCurrency = 'USD',
+
+    [Parameter(Mandatory=$false)]
+    [string[]]$CostServiceName = @(),
+
+    [Parameter(Mandatory=$false)]
+    [ValidateRange(1, 365)]
+    [int]$CostLookbackDays = 30,
 
     # ── Legacy output switches (backward compatibility — hidden from tab-completion) ──
     [Parameter(Mandatory=$false, DontShow)]
@@ -301,7 +294,7 @@ param(
 )
 
 # Script Version
-$ScriptVersion = "3.2.0"
+$ScriptVersion = "4.0.0"
 $ScriptLastUpdated = "2026-07-15"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -539,500 +532,167 @@ function Update-ScriptFromRepo {
     exit 0
 }
 
-# ═══════════════════════════════════════════════════════════════════════════
-# AI INTEGRATION — must be defined before parameter resolution calls them
-# ═══════════════════════════════════════════════════════════════════════════
-
-function Resolve-AIProvider {
-    <#
-    .SYNOPSIS
-        Resolves the GitHub Models endpoint and auth header from script parameters
-        and environment variables.  Returns $null if AI is disabled or not configured.
-    #>
+function Resolve-AzureTenantSubscriptionContext {
     param(
-        [string]$AI,
-        [string]$AIKey,
-        [string]$AIModel
+        [Parameter(Mandatory)][string]$TenantId,
+        [string]$RequestedSubscription = '',
+        $CurrentContext = $null,
+        [AllowNull()][AllowEmptyCollection()][object[]]$TenantSubscriptions = $null
     )
 
-    if ($AI -eq 'Off') { return $null }
-
-    # ── Resolve GitHub PAT from parameter or environment ──
-    $key = $AIKey
-    if (-not $key) { $key = $env:GITHUB_TOKEN }
-
-    if (-not $key) {
-        Write-Host "  ⚠️  AI enabled but no GitHub token found." -ForegroundColor Yellow
-        Write-Host "     Set -AIKey or the GITHUB_TOKEN environment variable." -ForegroundColor Gray
-        Write-Host "     Generate a PAT at: GitHub.com → Settings → Developer settings → Personal access tokens" -ForegroundColor Gray
-        return $null
+    if ($null -eq $CurrentContext) { $CurrentContext = Get-AzContext }
+    if ($null -eq $TenantSubscriptions) {
+        $TenantSubscriptions = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop)
     }
+    $available = @($TenantSubscriptions | Where-Object { -not $_.State -or $_.State -eq 'Enabled' })
 
-    return @{
-        Provider = 'GitHub Models'
-        Endpoint = 'https://models.github.ai/inference/chat/completions'
-        Headers  = @{
-            'Content-Type'         = 'application/json'
-            'Accept'               = 'application/vnd.github+json'
-            'Authorization'        = "Bearer $key"
-            'X-GitHub-Api-Version' = '2026-03-10'
+    if ($RequestedSubscription) {
+        $match = $available | Where-Object {
+            [string]::Equals([string]$_.Id, $RequestedSubscription, [System.StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals([string]$_.Name, $RequestedSubscription, [System.StringComparison]::OrdinalIgnoreCase)
+        } | Select-Object -First 1
+        return [PSCustomObject][ordered]@{
+            State = if ($match) { 'Resolved' } else { 'RequestedSubscriptionUnavailable' }
+            Subscription = $match
+            Message = if ($match) { 'The requested subscription belongs to the selected tenant.' } else { 'The requested subscription is not available in the selected tenant.' }
         }
-        Model    = $AIModel
     }
-}
 
-function New-AIPromptPayload {
-    <#
-    .SYNOPSIS
-        Builds the chat completions request body from pre-computed assessment metrics.
-        AI receives ONLY aggregated numbers — never raw resource IDs or subscription names.
-    #>
-    param(
-        [string]$Mode,           # 'Summary' or 'Full'
-        [hashtable]$Metrics,     # pre-computed summary numbers
-        [hashtable]$AIConfig     # resolved provider config
-    )
-
-    $systemPrompt = @"
-You are a senior Azure cloud security, governance, and compliance advisor writing a comprehensive executive assessment report. You will receive a structured JSON object containing pre-computed Azure Policy assessment metrics.
-
-Your job is NOT just to narrate the numbers. You must ANALYSE the assessment against industry best practices and provide expert judgement. Think like an auditor and architect combined.
-
-ANALYSIS FRAMEWORK — Apply these lenses to the data:
-
-1. MICROSOFT AZURE LANDING ZONE (ALZ) BEST PRACTICES
-    - Treat alzCoverage as an inventory comparison against the official versioned ALZ Library source reported in the metrics.
-    - Name missing and DoNotEnforce ALZ assignments, but do not invent a percentage threshold for architectural maturity.
-    - Explain that assignment presence does not by itself validate parameters, exclusions, selectors, overrides, or effective compliance.
-
-2. SECURITY CONTROL BALANCE
-    - Describe the observed Deny, Audit, DINE, and Modify distribution without applying universal target ratios.
-    - Judge suitability only in the context of assignment effects, scopes, exclusions, and the organisation's stated requirements.
-
-3. COMPLIANCE POSTURE (dedicate at least 120 words in situationSummary)
-   - Non-compliant resources in security-critical categories (Network, Security Center, Encryption, Key Vault) are higher priority than tagging non-compliance.
-   - Use ncAssignmentDetail to NAME each non-compliant assignment, its NC count, total resources, effect type, and enforcement mode.
-    - If an assignment has isDINE=true AND ncResources>0, report that remediation status requires verification. Non-compliance alone does not prove a broken remediation task; the task may not have run, evaluation may be pending, or the assignment identity may lack permissions.
-   - Calculate a compliance rate per top NC assignment: compliant% = ((totalResources - ncResources) / totalResources * 100).
-   - Check nonComplianceByCategory to identify which Azure service categories have the most non-compliance.
-    - Reference remediationReviewCount and remediationReviewNote if the count is > 0.
-   - Do NOT say vague things like 'some resources are non-compliant'. Give specific numbers and names.
-
-4. SCOPE ARCHITECTURE
-   - Policies at MG level provide consistent governance; subscription-level assignments may indicate workarounds or exceptions.
-    - Resource-group assignments can be intentional; identify fragmentation risk without imposing a universal MG-level percentage target.
-
-5. COST GOVERNANCE (dedicate at least 100 words in situationSummary)
-   - Use allHighCostPolicies to NAME each high-cost policy, its effect type, enforcement mode, and scope.
-    - Treat costImpact as a heuristic exposure label, not an Azure bill or price quote.
-    - Do not quote unit prices or calculate budget impact unless actual Azure Cost Management or current Retail Prices API data is present in the metrics.
-    - DoNotEnforce does not prove zero cost because manual remediation may still be run and existing deployed resources may already incur charges.
-   - Reference mediumCostPolicies and lowCostPolicies counts for overall cost distribution context.
-   - If a high-cost policy has NC resources, explain that remediation tasks will deploy agents/resources which adds cost.
-   - Do NOT just say 'cost is a concern'. Give specific policy names, effects, and cost implications.
-
-6. ENFORCEMENT GAP ANALYSIS
-   - Every high-security policy in DoNotEnforce mode is an enforcement gap — a known risk accepted without formal exemption.
-   - Calculate the enforcement gap severity: count of high-security DoNotEnforce policies vs total high-security policies.
-
-RULES:
-1. NEVER invent numbers. Only reference metrics explicitly in the input.
-2. Every claim must cite a specific metric from the input.
-3. Output must be valid JSON. CRITICAL: escape all double quotes inside string values with backslash. Use single quotes or rephrase to avoid quote issues.
-4. The situationSummary MUST be 600-1000 words covering ALL analysis areas above. Write in flowing paragraphs with clear topic transitions. Start each major area with a clear topic sentence.
-5. Provide exactly 5 topDrivers spanning security, compliance, architecture, cost, and ALZ alignment.
-6. Provide 5-7 actions: at least 2x P1 (immediate), 2x P2 (this week), 1-2x P3 (this month).
-   Each action.detail must be 2-3 sentences with specific policy names, scopes, and expected outcomes.
-7. The complianceGaps array should list 3-5 specific compliance findings with framework references.
-8. The frameworkAlignment object must mark CIS/NIST/ISO as not measured unless the corresponding official initiative assignment and compliance data are present.
-9. For trend analysis, only comment if deltaData is present.
-10. The disclaimer must always be included.
-
-OUTPUT JSON SCHEMA:
-{
-  "posture": "Excellent|Good|Needs Improvement|At Risk",
-  "postureScore": <integer 0-100>,
-  "situationSummary": "string - rich multi-paragraph analysis covering all 6 framework areas above",
-  "topDrivers": ["string","string","string","string","string"],
-  "complianceGaps": [
-    {"area": "string - e.g. Network Security", "finding": "string - what is wrong", "risk": "High|Medium|Low", "reference": "string - relevant framework or best practice"}
-  ],
-  "frameworkAlignment": {
-    "azureLandingZone": {"status": "Aligned|Partially Aligned|Not Aligned", "detail": "string"},
-    "securityBaseline": {"status": "Strong|Moderate|Weak", "detail": "string"},
-    "wellArchitected": {"status": "Good|Needs Work|Poor", "detail": "string"}
-  },
-  "actions": [
-    {"priority": "P1|P2|P3", "title": "string", "effort": "Low|Medium|High", "detail": "string - 2-3 sentences with specific guidance", "category": "Security|Compliance|Cost|Architecture|Governance"}
-  ],
-  "trendInterpretation": "string or null",
-  "disclaimer": "All metrics sourced from Azure Resource Graph and analysed against public Microsoft best practices. Verify recommendations against your environment before applying."
-}
-"@
-
-    $userContent = $Metrics | ConvertTo-Json -Depth 10 -Compress
-
-    $messages = @(
-        @{ role = 'system'; content = $systemPrompt }
-        @{ role = 'user';   content = $userContent }
-    )
-
-    $body = @{ messages = $messages; temperature = 0; max_tokens = 6000 }
-    if ($AIConfig.Model) { $body['model'] = $AIConfig.Model }
-
-    return ($body | ConvertTo-Json -Depth 10)
-}
-
-function Invoke-AIAnalysis {
-    <#
-    .SYNOPSIS
-        Calls the AI provider and returns a validated hashtable of insights,
-        or $null on any failure (non-blocking).
-    #>
-    param(
-        [hashtable]$AIConfig,
-        [string]$RequestBody,
-        [hashtable]$Metrics     # for post-validation
-    )
-
-    try {
-        Write-Host "  Calling $($AIConfig.Provider) AI ($($AIConfig.Model ?? 'deployment default'))..." -ForegroundColor Gray
-        $response = Invoke-RestMethod -Uri $AIConfig.Endpoint -Method POST `
-            -Headers $AIConfig.Headers -Body $RequestBody `
-            -TimeoutSec 30 -ErrorAction Stop
-
-        $rawContent = $response.choices[0].message.content
-
-        # Strip markdown code fences if present
-        $rawContent = $rawContent -replace '(?s)^```json\s*', '' -replace '(?s)\s*```$', ''
-        $rawContent = $rawContent.Trim()
-
-        # Attempt parse; if it fails, try to repair common AI JSON issues
-        $aiResult = $null
+    $currentSubscriptionId = [string]$CurrentContext.Subscription.Id
+    $currentMatch = $available | Where-Object {
+        [string]::Equals([string]$_.Id, $currentSubscriptionId, [System.StringComparison]::OrdinalIgnoreCase)
+    } | Select-Object -First 1
+    $resolved = if ($currentMatch) { $currentMatch } else { $available | Select-Object -First 1 }
+    $currentSubscriptionOwner = $null
+    if (-not $resolved -and $currentSubscriptionId) {
         try {
-            $aiResult = $rawContent | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+            $currentSubscriptionOwner = Get-AzSubscription -SubscriptionId $currentSubscriptionId -ErrorAction Stop | Select-Object -First 1
         } catch {
-            # Common fix: AI sometimes produces unescaped quotes inside string values
-            # or trailing commas. Try regex-based repair.
-            Write-Host "  ⚠️  Initial JSON parse failed, attempting repair..." -ForegroundColor DarkYellow
-            try {
-                # Remove any trailing commas before } or ]
-                $repaired = $rawContent -replace ',\s*([\]}])', '$1'
-                $aiResult = $repaired | ConvertFrom-Json -AsHashtable -ErrorAction Stop
-            } catch {
-                # Last resort: extract fields individually via regex
-                Write-Host "  ⚠️  JSON repair failed, attempting field extraction..." -ForegroundColor DarkYellow
-                try {
-                    $aiResult = @{}
-                    if ($rawContent -match '"posture"\s*:\s*"([^"]*)"') { $aiResult['posture'] = $Matches[1] }
-                    if ($rawContent -match '"situationSummary"\s*:\s*"((?:[^"\\]|\\.)*)') {
-                        $aiResult['situationSummary'] = $Matches[1] -replace '\\n', "`n" -replace '\\"', '"'
-                    }
-                    if ($rawContent -match '"disclaimer"\s*:\s*"([^"]*)"') { $aiResult['disclaimer'] = $Matches[1] }
-
-                    # Extract topDrivers array
-                    if ($rawContent -match '"topDrivers"\s*:\s*\[((?:[^\]])*)\]') {
-                        $driversRaw = $Matches[1]
-                        $aiResult['topDrivers'] = @([regex]::Matches($driversRaw, '"((?:[^"\\]|\\.)*)"') | ForEach-Object { $_.Groups[1].Value })
-                    }
-
-                    # Extract actions array (simplified)
-                    $actionMatches = [regex]::Matches($rawContent, '\{[^{}]*"priority"\s*:\s*"(P[123])"[^{}]*"title"\s*:\s*"((?:[^"\\]|\\.)*)"[^{}]*"effort"\s*:\s*"((?:[^"\\]|\\.)*)"[^{}]*"detail"\s*:\s*"((?:[^"\\]|\\.)*)"[^{}]*\}')
-                    if ($actionMatches.Count -gt 0) {
-                        $aiResult['actions'] = @($actionMatches | ForEach-Object {
-                            @{ priority = $_.Groups[1].Value; title = $_.Groups[2].Value; effort = $_.Groups[3].Value; detail = $_.Groups[4].Value }
-                        })
-                    }
-
-                    # Extract trendInterpretation
-                    if ($rawContent -match '"trendInterpretation"\s*:\s*"((?:[^"\\]|\\.)*)"') {
-                        $aiResult['trendInterpretation'] = $Matches[1]
-                    }
-
-                    if ($aiResult.posture -and $aiResult.situationSummary) {
-                        Write-Host "  ✓ Extracted AI fields via regex fallback" -ForegroundColor DarkYellow
-                    } else {
-                        throw "Could not extract required fields"
-                    }
-                } catch {
-                    Write-Host "  ⚠️  All JSON parse attempts failed — discarding AI response." -ForegroundColor Yellow
-                    Write-Host "     Raw response (first 200 chars): $($rawContent.Substring(0, [math]::Min(200, $rawContent.Length)))" -ForegroundColor DarkGray
-                    return $null
-                }
-            }
+            $currentSubscriptionOwner = $null
         }
-
-        # ── Post-validation: ensure AI didn't hallucinate key metrics ──
-        $valid = $true
-
-        if (-not $aiResult.posture) {
-            Write-Host "  ⚠️  AI response missing 'posture' field — discarding." -ForegroundColor Yellow
-            $valid = $false
-        }
-
-        if (-not $aiResult.actions -or $aiResult.actions.Count -eq 0) {
-            Write-Host "  ⚠️  AI response missing 'actions' — discarding." -ForegroundColor Yellow
-            $valid = $false
-        }
-
-        if (-not $aiResult.situationSummary) {
-            Write-Host "  ⚠️  AI response missing 'situationSummary' — discarding." -ForegroundColor Yellow
-            $valid = $false
-        }
-
-        if ($valid) {
-            # Stamp metadata
-            $aiResult['_provider'] = $AIConfig.Provider
-            $aiResult['_model'] = $AIConfig.Model ?? 'deployment-default'
-            $aiResult['_generatedAt'] = (Get-Date).ToString('o')
-            $aiResult['_temperature'] = 0
-            Write-Host "  ✓ AI analysis complete ($($aiResult.actions.Count) actions, posture: $($aiResult.posture))" -ForegroundColor Green
-            return $aiResult
-        }
-
-        return $null
     }
-    catch {
-        Write-Host "  ⚠️  AI call failed (non-blocking): $($_.Exception.Message)" -ForegroundColor Yellow
-        Write-Host "     Assessment continues with deterministic output." -ForegroundColor Gray
-        return $null
+
+    [PSCustomObject][ordered]@{
+        State = if ($resolved) { 'Resolved' } else { 'NoCompatibleSubscription' }
+        Subscription = $resolved
+        SuggestedTenantId = if ($currentSubscriptionOwner) { [string]$currentSubscriptionOwner.TenantId } else { '' }
+        CurrentSubscriptionName = if ($currentSubscriptionOwner) { [string]$currentSubscriptionOwner.Name } else { [string]$CurrentContext.Subscription.Name }
+        Message = if ($currentMatch) {
+            'The current subscription belongs to the selected tenant.'
+        } elseif ($resolved) {
+            'The current subscription belongs to another tenant; a compatible subscription was selected.'
+        } else {
+            'No enabled subscription is available in the selected tenant.'
+        }
     }
 }
 
-function Show-AIInsights {
-    <#
-    .SYNOPSIS
-        Renders AI insights to the console in a structured, readable block
-        with auto-detected paragraph sections and visual formatting.
-    #>
+function Test-CostEvidenceRecord {
+    param([Parameter(Mandatory)]$Record)
+
+    $requiredProperties = @('EvidenceType', 'Amount', 'Currency', 'Region', 'Source', 'SourceUri', 'RetrievedAt', 'PriceOrCostDate')
+    foreach ($property in $requiredProperties) {
+        if (-not $Record.PSObject.Properties[$property] -or $null -eq $Record.$property -or [string]::IsNullOrWhiteSpace([string]$Record.$property)) {
+            return $false
+        }
+    }
+    if ($Record.EvidenceType -notin @('RetailPrice', 'ActualCost')) { return $false }
+    if ($Record.Source -notin @('Azure Retail Prices API', 'Azure Cost Management')) { return $false }
+    try { $sourceUri = [uri]$Record.SourceUri } catch { return $false }
+    if ($Record.EvidenceType -eq 'RetailPrice' -and ($sourceUri.Scheme -ne 'https' -or $sourceUri.Host -ne 'prices.azure.com')) { return $false }
+    if ($Record.EvidenceType -eq 'ActualCost' -and ($sourceUri.Scheme -ne 'https' -or $sourceUri.Host -ne 'management.azure.com' -or $sourceUri.AbsolutePath -notmatch '/providers/Microsoft\.CostManagement/query$')) { return $false }
+    if ([string]$Record.Currency -notmatch '^[A-Z]{3}$') { return $false }
+    if ([string]$Record.RetrievedAt -notmatch '^\d{4}-\d{2}-\d{2}T') { return $false }
+    if ([string]$Record.PriceOrCostDate -notmatch '^\d{4}-\d{2}-\d{2}') { return $false }
+    try { [void][decimal]$Record.Amount } catch { return $false }
+    return $true
+}
+
+function Get-AzureRetailPriceEvidence {
     param(
-        [hashtable]$AIResult,
-        [string]$Mode   # 'Summary' or 'Full'
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Region,
+        [Parameter(Mandatory)][ValidatePattern('^[A-Za-z]{3}$')][string]$Currency,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string[]]$ServiceNames
     )
 
-    if (-not $AIResult) { return }
-
-    # ── Helper: word-wrap text at a given width with optional indent ──
-    function Format-Wrapped {
-        param([string]$Text, [int]$Width = 75, [string]$Indent = '  ')
-        $words = $Text -split '\s+'
-        $line = $Indent
-        foreach ($word in $words) {
-            if (($line.Length + $word.Length + 1) -gt $Width) {
-                Write-Host $line -ForegroundColor Gray
-                $line = "$Indent$word"
-            } else {
-                if ($line -eq $Indent) { $line += $word } else { $line += " $word" }
+    $retrievedAt = (Get-Date).ToUniversalTime().ToString('o')
+    $evidence = [System.Collections.Generic.List[object]]::new()
+    foreach ($serviceName in @($ServiceNames | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+        $escapedService = $serviceName.Replace("'", "''")
+        $escapedRegion = $Region.Replace("'", "''")
+        $filter = [uri]::EscapeDataString("armRegionName eq '$escapedRegion' and serviceName eq '$escapedService' and priceType eq 'Consumption'")
+        $uri = "https://prices.azure.com/api/retail/prices?currencyCode=$($Currency.ToUpperInvariant())&`$filter=$filter"
+        $response = Invoke-RestMethod -Method Get -Uri $uri -Headers @{ Accept = 'application/json' } -ErrorAction Stop
+        foreach ($item in @($response.Items | Select-Object -First 50)) {
+            if ($null -eq $item.retailPrice) { continue }
+            $record = [PSCustomObject][ordered]@{
+                EvidenceType = 'RetailPrice'
+                Description = "$($item.serviceName) | $($item.productName) | $($item.skuName)"
+                Amount = [decimal]$item.retailPrice
+                Unit = [string]$item.unitOfMeasure
+                Currency = [string]$item.currencyCode
+                Region = [string]$item.armRegionName
+                Source = 'Azure Retail Prices API'
+                SourceUri = $uri
+                RetrievedAt = $retrievedAt
+                PriceOrCostDate = if ($item.effectiveStartDate) { ([datetime]$item.effectiveStartDate).ToUniversalTime().ToString('o') } else { $retrievedAt }
             }
-        }
-        if ($line.Trim()) { Write-Host $line -ForegroundColor Gray }
-    }
-
-    $postureIcon = switch ($AIResult.posture) {
-        'Excellent'          { '✅' }
-        'Good'               { '🟢' }
-        'Needs Improvement'  { '🟠' }
-        'At Risk'            { '🔴' }
-        default              { '❓' }
-    }
-
-    $postureColor = switch ($AIResult.posture) {
-        'Excellent'          { 'Green' }
-        'Good'               { 'Green' }
-        'Needs Improvement'  { 'Yellow' }
-        'At Risk'            { 'Red' }
-        default              { 'White' }
-    }
-
-    Write-Host ""
-    Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
-    Write-Host "  🤖 AI EXECUTIVE INSIGHTS" -NoNewline -ForegroundColor Magenta
-    Write-Host "  (powered by $($AIResult._provider), $($AIResult._model))" -ForegroundColor DarkMagenta
-    Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
-
-    # Posture badge
-    Write-Host ""
-    Write-Host "  ┌──────────────────────────────────────┐" -ForegroundColor $postureColor
-    Write-Host "  │  Overall Posture: $postureIcon $($AIResult.posture)" -NoNewline -ForegroundColor $postureColor
-    $padLen = 37 - ("  Overall Posture: X $($AIResult.posture)").Length
-    if ($padLen -lt 0) { $padLen = 0 }
-    Write-Host "$(' ' * $padLen) │" -ForegroundColor $postureColor
-    Write-Host "  └──────────────────────────────────────┘" -ForegroundColor $postureColor
-    Write-Host ""
-
-    # ── Situation Summary — group all sentences by topic, render once per topic ──
-    Write-Host "  📋 SITUATION SUMMARY" -ForegroundColor Cyan
-    Write-Host "  ───────────────────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
-
-    $summary = $AIResult.situationSummary
-    if ($summary) {
-        # Topic definitions in display order (key = id, value = [pattern, icon, label, color])
-        $topicDefs = [ordered]@{
-            'posture'      = @('enforcement|overall|posture|total.*assignments|policy.*landscape|policy.*mix|detection.heavy|fragmented', '📊', 'Overall Posture & Enforcement', 'White')
-            'alz'          = @('landing.zone|ALZ|well.architected|alignment|coverage.*recommended|guardrail|Enforce-GR', '🛬', 'Landing Zone Alignment', 'Blue')
-            'security'     = @('security|high.risk|vulnerabilit|threat|defend|control.*balance|deny.*audit|preventive|enforcement.gap|imbalance', '🔒', 'Security & Control Balance', 'Red')
-            'compliance'   = @('compliance|non.compliant|remediat|DINE.*broken|managed.identity|drift', '📝', 'Compliance & Remediation', 'Yellow')
-            'architecture' = @('architect|scope.*distribution|management.group|subscription.level|resource.group|category.*break|MG.level|top.heavy', '🏗️', 'Scope Architecture', 'Cyan')
-            'cost'         = @('cost|budget|expense|deploy.*agent|monitoring.*agent|log.analytics|defender.*plan|per.server|ingestion', '💰', 'Cost Governance', 'DarkYellow')
-            'exemptions'   = @('exemption|waiver|flexibility|governance.*simplif', '📋', 'Exemptions', 'DarkCyan')
-            'risks'        = @('risk.*compound|key.risk|critical.*factor|combined|when.*combined|overall.*risk|compounding', '⚠️', 'Key Risks', 'Red')
-        }
-
-        # Split into sentences
-        $sentences = [regex]::Split($summary, '(?<=[.!?])\s+(?=[A-Z])')
-
-        # Pass 1: assign each sentence to its best-matching topic bucket
-        $buckets = [ordered]@{}
-        foreach ($key in $topicDefs.Keys) { $buckets[$key] = [System.Collections.Generic.List[string]]::new() }
-        $uncategorized = [System.Collections.Generic.List[string]]::new()
-
-        foreach ($sentence in $sentences) {
-            $matched = $false
-            foreach ($key in $topicDefs.Keys) {
-                if ($sentence -match $topicDefs[$key][0]) {
-                    [void]$buckets[$key].Add($sentence)
-                    $matched = $true
-                    break
-                }
-            }
-            if (-not $matched) { [void]$uncategorized.Add($sentence) }
-        }
-
-        # Distribute uncategorized to risks or posture
-        if ($uncategorized.Count -gt 0) {
-            $fallback = if ($buckets['risks'].Count -gt 0) { 'risks' } else { 'posture' }
-            foreach ($s in $uncategorized) { [void]$buckets[$fallback].Add($s) }
-        }
-
-        # Pass 2: render one consolidated block per topic
-        foreach ($key in $topicDefs.Keys) {
-            if ($buckets[$key].Count -eq 0) { continue }
-            $icon  = $topicDefs[$key][1]
-            $label = $topicDefs[$key][2]
-            $color = $topicDefs[$key][3]
-            Write-Host ""
-            Write-Host "    $icon $label" -ForegroundColor $color
-            Format-Wrapped -Text ($buckets[$key] -join ' ') -Width 77 -Indent '      '
+            if (Test-CostEvidenceRecord -Record $record) { [void]$evidence.Add($record) }
         }
     }
+    @($evidence)
+}
 
-    Write-Host ""
-    Write-Host "  ───────────────────────────────────────────────────────────────────────────" -ForegroundColor DarkGray
+function Get-AzureCostManagementEvidence {
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$SubscriptionId,
+        [ValidateRange(1, 365)][int]$LookbackDays = 30
+    )
 
-    # ── Top Drivers ──
-    if ($AIResult.topDrivers -and $AIResult.topDrivers.Count -gt 0) {
-        Write-Host ""
-        Write-Host "  🔍 TOP RISK DRIVERS" -ForegroundColor Cyan
-        $driverNum = 0
-        foreach ($driver in $AIResult.topDrivers) {
-            $driverNum++
-            $dColor = switch ($driverNum) { 1 { 'Red' }; 2 { 'Yellow' }; 3 { 'DarkYellow' }; default { 'Gray' } }
-            Write-Host "    $driverNum." -NoNewline -ForegroundColor DarkGray
-            Write-Host " $driver" -ForegroundColor $dColor
+    $periodEnd = (Get-Date).ToUniversalTime()
+    $periodStart = $periodEnd.AddDays(-$LookbackDays)
+    $path = "/subscriptions/$SubscriptionId/providers/Microsoft.CostManagement/query?api-version=2023-11-01"
+    $body = [ordered]@{
+        type = 'ActualCost'
+        timeframe = 'Custom'
+        timePeriod = [ordered]@{ from = $periodStart.ToString('o'); to = $periodEnd.ToString('o') }
+        dataset = [ordered]@{
+            granularity = 'None'
+            aggregation = [ordered]@{ totalCost = [ordered]@{ name = 'Cost'; function = 'Sum' } }
+            grouping = @(
+                [ordered]@{ type = 'Dimension'; name = 'ResourceLocation' },
+                [ordered]@{ type = 'Dimension'; name = 'Currency' }
+            )
         }
     }
+    $response = Invoke-AzRestMethod -Method POST -Path $path -Payload ($body | ConvertTo-Json -Depth 10 -Compress) -ErrorAction Stop
+    $content = $response.Content | ConvertFrom-Json -Depth 20
+    $columns = @($content.properties.columns)
+    $columnIndexes = @{}
+    for ($index = 0; $index -lt $columns.Count; $index++) { $columnIndexes[[string]$columns[$index].name] = $index }
+    if (-not $columnIndexes.ContainsKey('Cost') -or -not $columnIndexes.ContainsKey('Currency')) { return @() }
 
-    # ── Prioritized Actions ──
-    if ($AIResult.actions -and $AIResult.actions.Count -gt 0) {
-        Write-Host ""
-        Write-Host "  🎯 PRIORITIZED ACTIONS" -ForegroundColor Cyan
-        Write-Host "  ┌────────┬────────────────────────────────────────────────────────────┐" -ForegroundColor DarkGray
-        foreach ($action in $AIResult.actions) {
-            $pColor = switch ($action.priority) {
-                'P1' { 'Red' }
-                'P2' { 'Yellow' }
-                'P3' { 'DarkCyan' }
-                default { 'White' }
-            }
-            $pLabel = switch ($action.priority) {
-                'P1' { 'NOW   ' }
-                'P2' { '7 DAYS' }
-                'P3' { '30 DAY' }
-                default { '      ' }
-            }
-            Write-Host "  │ " -NoNewline -ForegroundColor DarkGray
-            Write-Host "$($action.priority) $pLabel" -NoNewline -ForegroundColor $pColor
-            Write-Host " │ " -NoNewline -ForegroundColor DarkGray
-            # Truncate title to fit the box
-            $titleMaxLen = 58
-            $title = if ($action.title.Length -gt $titleMaxLen) { $action.title.Substring(0, $titleMaxLen - 3) + '...' } else { $action.title }
-            Write-Host $title -ForegroundColor White
-            if ($action.effort) {
-                Write-Host "  │          │ " -NoNewline -ForegroundColor DarkGray
-                Write-Host "Effort: $($action.effort)" -ForegroundColor DarkGray
-            }
-            if ($Mode -eq 'Full' -and $action.detail) {
-                # Word-wrap detail inside the box
-                $detailWords = $action.detail -split '\s+'
-                $dLine = ''
-                foreach ($dw in $detailWords) {
-                    if (($dLine.Length + $dw.Length + 1) -gt 56) {
-                        Write-Host "  │          │ " -NoNewline -ForegroundColor DarkGray
-                        Write-Host $dLine -ForegroundColor DarkGray
-                        $dLine = $dw
-                    } else {
-                        if ($dLine) { $dLine += " $dw" } else { $dLine = $dw }
-                    }
-                }
-                if ($dLine) {
-                    Write-Host "  │          │ " -NoNewline -ForegroundColor DarkGray
-                    Write-Host $dLine -ForegroundColor DarkGray
-                }
-            }
-            Write-Host "  ├────────┼────────────────────────────────────────────────────────────┤" -ForegroundColor DarkGray
+    $retrievedAt = (Get-Date).ToUniversalTime().ToString('o')
+    $costRows = @($content.properties.rows)
+    if ($costRows.Count -gt 0 -and $costRows[0] -isnot [System.Array]) { $costRows = @(, $costRows) }
+    @($costRows | ForEach-Object {
+        $row = @($_)
+        $region = if ($columnIndexes.ContainsKey('ResourceLocation')) { [string]$row[$columnIndexes.ResourceLocation] } else { 'Unspecified' }
+        if ([string]::IsNullOrWhiteSpace($region)) { $region = 'Unspecified' }
+        $record = [PSCustomObject][ordered]@{
+            EvidenceType = 'ActualCost'
+            Description = "Actual subscription cost for $($periodStart.ToString('yyyy-MM-dd')) to $($periodEnd.ToString('yyyy-MM-dd'))"
+            Amount = [decimal]$row[$columnIndexes.Cost]
+            Unit = 'Actual cost for period'
+            Currency = [string]$row[$columnIndexes.Currency]
+            Region = $region
+            Source = 'Azure Cost Management'
+            SourceUri = "https://management.azure.com$path"
+            RetrievedAt = $retrievedAt
+            PriceOrCostDate = $periodEnd.ToString('o')
         }
-        Write-Host "  └────────┴────────────────────────────────────────────────────────────┘" -ForegroundColor DarkGray
-    }
-
-    # ── Compliance Gaps ──
-    if ($AIResult.complianceGaps -and $AIResult.complianceGaps.Count -gt 0) {
-        Write-Host ""
-        Write-Host "  🚨 COMPLIANCE GAPS" -ForegroundColor Cyan
-        foreach ($gap in $AIResult.complianceGaps) {
-            $riskColor = switch ($gap.risk) { 'High' { 'Red' }; 'Medium' { 'Yellow' }; 'Low' { 'Gray' }; default { 'White' } }
-            Write-Host "    [$($gap.risk)]" -NoNewline -ForegroundColor $riskColor
-            Write-Host " $($gap.area)" -NoNewline -ForegroundColor White
-            Write-Host " — $($gap.finding)" -ForegroundColor DarkGray
-            if ($gap.reference) { Write-Host "         Ref: $($gap.reference)" -ForegroundColor DarkCyan }
-        }
-    }
-
-    # ── Framework Alignment ──
-    if ($AIResult.frameworkAlignment) {
-        Write-Host ""
-        Write-Host "  📐 FRAMEWORK ALIGNMENT" -ForegroundColor Cyan
-        $fa = $AIResult.frameworkAlignment
-        if ($fa.azureLandingZone) {
-            $alzColor = switch ($fa.azureLandingZone.status) { 'Aligned' { 'Green' }; 'Partially Aligned' { 'Yellow' }; 'Not Aligned' { 'Red' }; default { 'White' } }
-            Write-Host "    Azure Landing Zone: " -NoNewline -ForegroundColor White
-            Write-Host "$($fa.azureLandingZone.status)" -ForegroundColor $alzColor
-            if ($fa.azureLandingZone.detail) { Format-Wrapped -Text $fa.azureLandingZone.detail -Width 73 -Indent '      ' }
-        }
-        if ($fa.securityBaseline) {
-            $secColor = switch ($fa.securityBaseline.status) { 'Strong' { 'Green' }; 'Moderate' { 'Yellow' }; 'Weak' { 'Red' }; default { 'White' } }
-            Write-Host "    Security Baseline:  " -NoNewline -ForegroundColor White
-            Write-Host "$($fa.securityBaseline.status)" -ForegroundColor $secColor
-            if ($fa.securityBaseline.detail) { Format-Wrapped -Text $fa.securityBaseline.detail -Width 73 -Indent '      ' }
-        }
-        if ($fa.wellArchitected) {
-            $waColor = switch ($fa.wellArchitected.status) { 'Good' { 'Green' }; 'Needs Work' { 'Yellow' }; 'Poor' { 'Red' }; default { 'White' } }
-            Write-Host "    Well-Architected:   " -NoNewline -ForegroundColor White
-            Write-Host "$($fa.wellArchitected.status)" -ForegroundColor $waColor
-            if ($fa.wellArchitected.detail) { Format-Wrapped -Text $fa.wellArchitected.detail -Width 73 -Indent '      ' }
-        }
-    }
-
-    # ── Trend Interpretation ──
-    if ($AIResult.trendInterpretation) {
-        Write-Host ""
-        Write-Host "  📈 TREND INTERPRETATION" -ForegroundColor Cyan
-        Format-Wrapped -Text $AIResult.trendInterpretation -Width 77 -Indent '    '
-    }
-
-    # ── Disclaimer ──
-    Write-Host ""
-    Write-Host "  ℹ️  $($AIResult.disclaimer ?? 'All metrics sourced from Azure Resource Graph. Verify before applying.')" -ForegroundColor DarkGray
-    Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
+        if (Test-CostEvidenceRecord -Record $record) { $record }
+    })
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1066,21 +726,6 @@ $ExportYAML = $Output -and ($Output -contains 'YAML' -or $Output -contains 'All'
 $ShowCEPCompliance = $CEP -in @('Show', 'Test', 'Export', 'Full')
 $RunCEPTests = $CEP -in @('Test', 'Full')
 $ExportCEPCompliance = $CEP -in @('Export', 'Full')
-
-# AI flags
-$EnableAI = $AI -ne 'Off'
-$AIMode = $AI
-$script:AIInsightsResult = $null
-
-# Resolve AI provider early so we can warn before the assessment starts
-$script:AIProviderConfig = $null
-if ($EnableAI) {
-    $script:AIProviderConfig = Resolve-AIProvider -AI $AI -AIKey $AIKey -AIModel $AIModel
-    if (-not $script:AIProviderConfig) {
-        Write-Host "  AI insights disabled — continuing with deterministic output." -ForegroundColor Gray
-        $EnableAI = $false
-    }
-}
 
 # ── Filter guard: CEP requires tenant-wide scope ──
 if (($ManagementGroup -or $Subscription) -and ($ShowCEPCompliance -or $RunCEPTests -or $ExportCEPCompliance)) {
@@ -1138,8 +783,7 @@ Show-UpdateNotification -UpdateInfo $updateInfo
 $filterLabel = if ($ManagementGroup) { "MG: $ManagementGroup" } elseif ($Subscription) { "Sub: $Subscription" } else { 'All (tenant-wide)' }
 $outputLabel = if ($Output) { ($Output -join ', ') } else { 'Console only' }
 $cepLabel = if ($CEP) { $CEP } else { 'Off' }
-$aiLabel = if ($EnableAI) { "$AIMode (GitHub Copilot)" } else { 'Off' }
-Write-Host "  Filter: $filterLabel | Output: $outputLabel | CEP: $cepLabel | AI: $aiLabel$(if ($QuickAssess) { ' | QuickAssess: On' })" -ForegroundColor DarkGray
+Write-Host "  Filter: $filterLabel | Output: $outputLabel | CEP: $cepLabel$(if ($QuickAssess) { ' | QuickAssess: On' })" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "⚠️  DISCLAIMER:" -ForegroundColor Yellow
 Write-Host "   This project is made and maintained by Riccardo Pomato. It is NOT an official Microsoft tool." -ForegroundColor Gray
@@ -1219,6 +863,35 @@ if ($TenantId) {
     }
 }
 
+try {
+    $tenantContextResolution = Resolve-AzureTenantSubscriptionContext `
+        -TenantId $selectedTenant.Id `
+        -RequestedSubscription $Subscription
+    if ($tenantContextResolution.Subscription) {
+        $resolvedSubscription = $tenantContextResolution.Subscription
+        Set-AzContext -TenantId $selectedTenant.Id -SubscriptionId $resolvedSubscription.Id -ErrorAction Stop | Out-Null
+        if ($tenantContextResolution.Message -match 'another tenant') {
+            Write-Host "Selected compatible subscription: $($resolvedSubscription.Name) ($($resolvedSubscription.Id))" -ForegroundColor Yellow
+        }
+    } elseif ($CEP -ne 'Off') {
+        Write-Host 'ERROR: Cyber Essentials assessment requires a subscription associated with the selected tenant.' -ForegroundColor Red
+        Write-Host $tenantContextResolution.Message -ForegroundColor Yellow
+        if ($tenantContextResolution.SuggestedTenantId) {
+            Write-Host "The current subscription '$($tenantContextResolution.CurrentSubscriptionName)' belongs to tenant $($tenantContextResolution.SuggestedTenantId)." -ForegroundColor Yellow
+            Write-Host "Run Connect-AzAccount -TenantId $($tenantContextResolution.SuggestedTenantId), then rerun with -TenantId $($tenantContextResolution.SuggestedTenantId)." -ForegroundColor Yellow
+        } else {
+            Write-Host 'Reconnect with Connect-AzAccount -TenantId <subscription-tenant-id>, then rerun with that tenant.' -ForegroundColor Yellow
+        }
+        exit 1
+    }
+} catch {
+    if ($CEP -ne 'Off') {
+        Write-Host 'ERROR: Unable to establish a tenant/subscription context required for Cyber Essentials assessment.' -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor DarkGray
+        exit 1
+    }
+}
+
 #region Function Definitions
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1234,6 +907,7 @@ function Export-AssessmentYAML {
         [string]$OutputPath,
         [array]$PolicyResults,
         [hashtable]$ComplianceData,
+        $CEPAssessment = $null,
         [array]$CEPExportData,
         [array]$CEPTestResults,
         [array]$CEPPerScopeData,
@@ -1251,6 +925,8 @@ function Export-AssessmentYAML {
         [int]$EnforcedCount,
         [int]$AuditOnlyCount,
         [int]$TotalNCResources,
+        $DataQuality = $null,
+        [array]$AssessmentFindings = @(),
         [string]$ScriptVersion
     )
 
@@ -1286,8 +962,10 @@ function Export-AssessmentYAML {
             enforcedCount        = $EnforcedCount
             auditOnlyCount       = $AuditOnlyCount
             totalNonCompliant    = $TotalNCResources
+            nonCompliantCountSemantics = 'Sum of distinct non-compliant resources per assignment; the same Azure resource may contribute to more than one assignment.'
             highRiskCount        = @($PolicyResults | Where-Object { $_.'Risk Level' -eq 'High' }).Count
             effectTypes          = [ordered]@{}
+            remediationStates    = [ordered]@{}
             scopeBreakdown       = [ordered]@{
                 managementGroups = @($PolicyResults | Where-Object { $_.'Scope Type' -eq 'Management Group' }).Count
                 subscriptions    = @($PolicyResults | Where-Object { $_.'Scope Type' -eq 'Subscription' }).Count
@@ -1297,12 +975,19 @@ function Export-AssessmentYAML {
         }
         assignments = @()
         compliance  = @()
+        dataQuality = $DataQuality
+        cepAssessment = $CEPAssessment
+        assessmentFindings = @($AssessmentFindings)
+        assessmentActions = @(ConvertTo-AssessmentActions -AssessmentFindings $AssessmentFindings)
     }
 
     # Effect type breakdown
-    $PolicyResults | Group-Object 'Effect Type' | Sort-Object Count -Descending | ForEach-Object {
-        $effectName = if ([string]::IsNullOrWhiteSpace($_.Name)) { '(not specified)' } else { $_.Name }
-        $yamlDatabase.summary.effectTypes[$effectName] = $_.Count
+    $yamlEffectCounts = Get-EffectivePolicyEffectCounts -PolicyResults $PolicyResults
+    $yamlEffectCounts.Breakdown | ForEach-Object {
+        $yamlDatabase.summary.effectTypes[$_.Effect] = $_.Count
+    }
+    $PolicyResults | Where-Object { $_.'Remediation Evidence' } | Group-Object { $_.'Remediation Evidence'.State } | ForEach-Object {
+        $yamlDatabase.summary.remediationStates[$_.Name] = $_.Count
     }
 
     # Category breakdown
@@ -1314,17 +999,26 @@ function Export-AssessmentYAML {
     # Full assignment records
     $yamlDatabase.assignments = @($PolicyResults | ForEach-Object {
         [ordered]@{
+            assignmentId         = $_.'Assignment ID'
             assignmentName       = $_.'Assignment Name'
             displayName          = $_.'Display Name'
             policyType           = $_.'Policy Type'
             category             = $_.'Category'
             effectType           = $_.'Effect Type'
+            effectiveEffects     = @($_.'Effective Effects')
+            primaryEffect        = $_.'Primary Effect'
+            isPreventive         = [bool]$_.'Is Preventive'
+            isDetective          = [bool]$_.'Is Detective'
+            isRemediating        = [bool]$_.'Is Remediating'
+            isParameterised      = [bool]$_.'Is Parameterised'
+            isDisabled           = [bool]$_.'Is Disabled'
             enforcementMode      = $_.'Enforcement Mode'
+            complianceState      = $_.'Compliance State'
             nonCompliantResources= if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }
             nonCompliantPolicies = if ($_.'Non-Compliant Policies' -match '^\d+$') { [int]$_.'Non-Compliant Policies' } else { 0 }
             totalResources       = if ($_.'Total Resources' -match '^\d+$') { [int]$_.'Total Resources' } else { 0 }
             securityImpact       = $_.'Security Impact'
-            costImpact           = $_.'Cost Impact'
+            costImpact           = $_.'Cost Exposure'
             complianceImpact     = $_.'Compliance Impact'
             operationalOverhead  = $_.'Operational Overhead'
             riskLevel            = $_.'Risk Level'
@@ -1336,6 +1030,7 @@ function Export-AssessmentYAML {
             recommendation       = $_.'Recommendation'
             scope                = $_.'Scope'
             exemptions           = if ($_.'Exemptions' -match '^\d+$') { [int]$_.'Exemptions' } else { 0 }
+            remediationEvidence  = $_.'Remediation Evidence'
         }
     })
 
@@ -1344,6 +1039,8 @@ function Export-AssessmentYAML {
         $yamlDatabase.compliance = @($ComplianceData.GetEnumerator() | ForEach-Object {
             [ordered]@{
                 policyAssignmentId    = $_.Key
+                complianceState       = $_.Value.ComplianceState
+                compliantResources    = $_.Value.CompliantResources
                 nonCompliantResources = $_.Value.NonCompliantResources
                 nonCompliantPolicies  = $_.Value.NonCompliantPolicyDefs
                 totalResources        = $_.Value.TotalResources
@@ -1445,24 +1142,6 @@ function Export-AssessmentYAML {
         $yamlDatabase.summary['expiredExemptions'] = @($ExemptionData | Where-Object { $_.'Is Expired' }).Count
         $yamlDatabase.summary['waiverExemptions'] = @($ExemptionData | Where-Object { $_.'Category' -eq 'Waiver' }).Count
         $yamlDatabase.summary['mitigatedExemptions'] = @($ExemptionData | Where-Object { $_.'Category' -eq 'Mitigated' }).Count
-    }
-
-    # Add AI insights if available
-    if ($script:AIInsightsResult) {
-        $yamlDatabase['aiInsights'] = [ordered]@{
-            generatedAt          = $script:AIInsightsResult._generatedAt
-            provider             = $script:AIInsightsResult._provider
-            model                = $script:AIInsightsResult._model
-            temperature          = $script:AIInsightsResult._temperature
-            posture              = $script:AIInsightsResult.posture
-            situationSummary     = $script:AIInsightsResult.situationSummary
-            topDrivers           = $script:AIInsightsResult.topDrivers
-            actions              = @($script:AIInsightsResult.actions | ForEach-Object {
-                [ordered]@{ priority = $_.priority; title = $_.title; effort = $_.effort; detail = $_.detail }
-            })
-            trendInterpretation  = $script:AIInsightsResult.trendInterpretation
-            disclaimer           = $script:AIInsightsResult.disclaimer
-        }
     }
 
     # Convert to YAML and write
@@ -1653,8 +1332,8 @@ function Get-YAMLDeltaData {
     $prevEffectTypes = $null
     if ($scopeFilterApplied -and $prevFilteredAssignments) {
         $prevEffectTypes = @{}
-        $prevFilteredAssignments | Group-Object { if ($_.effectType) { $_.effectType } else { '(not specified)' } } | ForEach-Object {
-            $prevEffectTypes[$_.Name] = $_.Count
+        (Get-EffectivePolicyEffectCounts -PolicyResults @($prevFilteredAssignments)).Breakdown | ForEach-Object {
+            $prevEffectTypes[$_.Effect] = $_.Count
         }
     } elseif ($prevSummary.effectTypes) {
         $prevEffectTypes = $prevSummary.effectTypes
@@ -1663,10 +1342,9 @@ function Get-YAMLDeltaData {
         $allEffects = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         foreach ($e in $prevEffectTypes.Keys) { [void]$allEffects.Add($e) }
         $currEffectCounts = @{}
-        $CurrentResults | Group-Object 'Effect Type' | ForEach-Object {
-            $eName = if ([string]::IsNullOrWhiteSpace($_.Name)) { '(not specified)' } else { $_.Name }
-            $currEffectCounts[$eName] = $_.Count
-            [void]$allEffects.Add($eName)
+        (Get-EffectivePolicyEffectCounts -PolicyResults $CurrentResults).Breakdown | ForEach-Object {
+            $currEffectCounts[$_.Effect] = $_.Count
+            [void]$allEffects.Add($_.Effect)
         }
         foreach ($eff in $allEffects) {
             $pCount = if ($prevEffectTypes.Contains($eff)) { [int]$prevEffectTypes[$eff] } else { 0 }
@@ -1907,6 +1585,49 @@ function Expand-AzGraphResult {
     }
 }
 
+function ConvertTo-ALZParameterSignature {
+    param($Parameters)
+
+    if ($null -eq $Parameters) { return '' }
+    $parameterObject = $Parameters
+    if ($Parameters -is [string]) {
+        if ([string]::IsNullOrWhiteSpace($Parameters)) { return '' }
+        try { $parameterObject = $Parameters | ConvertFrom-Json -AsHashtable -ErrorAction Stop } catch { return $Parameters.Trim() }
+    }
+
+    function ConvertTo-OrderedALZValue {
+        param($Value)
+        if ($Value -is [System.Collections.IDictionary]) {
+            $orderedValue = [ordered]@{}
+            foreach ($key in @($Value.Keys | Sort-Object)) {
+                $orderedValue[[string]$key] = ConvertTo-OrderedALZValue -Value $Value[$key]
+            }
+            return $orderedValue
+        }
+        if ($Value -is [PSCustomObject]) {
+            $orderedValue = [ordered]@{}
+            foreach ($property in @($Value.PSObject.Properties | Sort-Object Name)) {
+                $orderedValue[$property.Name] = ConvertTo-OrderedALZValue -Value $property.Value
+            }
+            return $orderedValue
+        }
+        if ($Value -is [array]) { return @($Value | ForEach-Object { ConvertTo-OrderedALZValue -Value $_ }) }
+        return $Value
+    }
+
+    (ConvertTo-OrderedALZValue -Value $parameterObject) | ConvertTo-Json -Depth 30 -Compress
+}
+
+function Test-ALZParameterCompatibility {
+    param($ExpectedParameters, $AssignmentParameters)
+
+    $expectedSignature = ConvertTo-ALZParameterSignature -Parameters $ExpectedParameters
+    if (-not $expectedSignature -or $expectedSignature -eq '{}') { return $true }
+    $assignmentSignature = ConvertTo-ALZParameterSignature -Parameters $AssignmentParameters
+    if (-not $assignmentSignature) { return $false }
+    $expectedSignature -eq $assignmentSignature
+}
+
 # Function to get Azure Landing Zone recommended policies from GitHub
 function Get-ALZRecommendedPolicies {
     param(
@@ -1933,7 +1654,9 @@ function Get-ALZRecommendedPolicies {
         }
 
         $script:ALZSourceVersion = $resolvedVersion
+        $script:ALZSourceRetrievedAt = (Get-Date).ToUniversalTime().ToString('o')
         $script:ALZPolicyDefinitionIds = @{}
+        $script:ALZAssets = [System.Collections.Generic.List[object]]::new()
         Write-Host "    Downloading ALZ Library $resolvedVersion..." -ForegroundColor Gray
 
         $archivePath = Join-Path ([System.IO.Path]::GetTempPath()) "alz-library-$([guid]::NewGuid().ToString('N')).zip"
@@ -1967,6 +1690,20 @@ function Get-ALZRecommendedPolicies {
                     $assignmentDefinition = Get-Content -Path $file.FullName -Raw | ConvertFrom-Json -Depth 30
                     $definitionId = "$($assignmentDefinition.properties.policyDefinitionId)".ToLowerInvariant()
                     if ($definitionId) { $script:ALZPolicyDefinitionIds[$policyName] = $definitionId }
+                    $relativePath = $file.FullName.Substring($extractPath.Length).TrimStart('\', '/')
+                    $archetype = if ($assignmentDefinition.properties.metadata.archetype) {
+                        [string]$assignmentDefinition.properties.metadata.archetype
+                    } elseif ($relativePath -match '(?i)[\\/]archetypes[\\/]([^\\/]+)') {
+                        $Matches[1]
+                    } else { '' }
+                    [void]$script:ALZAssets.Add([PSCustomObject][ordered]@{
+                        AssetName = $policyName
+                        DefinitionId = $definitionId
+                        Parameters = $assignmentDefinition.properties.parameters
+                        ParameterSignature = ConvertTo-ALZParameterSignature -Parameters $assignmentDefinition.properties.parameters
+                        Archetype = $archetype
+                        SourcePath = $relativePath
+                    })
                 } catch {
                     Write-Verbose "Unable to read ALZ assignment '$($file.Name)': $($_.Exception.Message)"
                 }
@@ -2011,6 +1748,9 @@ function Get-ALZRecommendedPolicies {
         foreach ($category in $categories) {
             $discoveredPolicies[$category] = @($discoveredPolicies[$category] | Select-Object -Unique | Sort-Object)
         }
+        $script:ALZAssets = @($script:ALZAssets |
+            Group-Object { "$($_.AssetName)|$($_.DefinitionId)|$($_.ParameterSignature)|$($_.Archetype)" } |
+            ForEach-Object { $_.Group | Select-Object -First 1 })
         
         Write-Host "    Successfully retrieved $totalFound policy recommendations from ALZ Library ($resolvedVersion)" -ForegroundColor Green
         return $discoveredPolicies
@@ -2019,7 +1759,9 @@ function Get-ALZRecommendedPolicies {
         Write-Host "    Error fetching from ALZ Library: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host "    Using static fallback list..." -ForegroundColor Yellow
         $script:ALZSourceVersion = 'static-fallback'
+        $script:ALZSourceRetrievedAt = (Get-Date).ToUniversalTime().ToString('o')
         $script:ALZPolicyDefinitionIds = @{}
+        $script:ALZAssets = @()
         return Get-FallbackALZPolicies
     }
     finally {
@@ -2080,6 +1822,776 @@ function Get-FallbackALZPolicies {
             'Deny-Classic-Resources'
         )
     }
+}
+
+function New-DataQuality {
+    param(
+        [Parameter(Mandatory)][string]$QueryName,
+        [Parameter(Mandatory)][bool]$QuerySucceeded,
+        [int]$RecordCount = 0,
+        [datetime]$Timestamp = [datetime]::UtcNow,
+        [bool]$FallbackUsed = $false,
+        [string]$ErrorMessage = ''
+    )
+
+    $query = [PSCustomObject]@{
+        Name         = $QueryName
+        Succeeded    = $QuerySucceeded
+        Records      = [math]::Max(0, $RecordCount)
+        Timestamp    = $Timestamp.ToUniversalTime().ToString('o')
+        FallbackUsed = $FallbackUsed
+        Error        = if ($QuerySucceeded) { '' } else { $ErrorMessage }
+    }
+
+    [PSCustomObject]@{
+        SuccessfulQueries = @($query | Where-Object Succeeded)
+        FailedQueries     = @($query | Where-Object { -not $_.Succeeded })
+        TotalRecords      = $query.Records
+        Timestamp         = $query.Timestamp
+        FallbackUsed      = $FallbackUsed
+        Queries           = @($query)
+    }
+}
+
+function Resolve-ComplianceAssessmentState {
+    param(
+        [Parameter(Mandatory)][bool]$QuerySucceeded,
+        [int]$QueryRecordCount = 0,
+        [int]$EvaluatedResources = 0,
+        [int]$CompliantResources = 0,
+        [int]$NonCompliantResources = 0,
+        [string]$QueryName = 'PolicyStates',
+        [datetime]$Timestamp = [datetime]::UtcNow,
+        [bool]$FallbackUsed = $false,
+        [string]$ErrorMessage = ''
+    )
+
+    $state = if (-not $QuerySucceeded) {
+        'DataUnavailable'
+    } elseif ($EvaluatedResources -le 0) {
+        'NotEvaluated'
+    } elseif ($NonCompliantResources -gt 0) {
+        'EvaluatedNonCompliant'
+    } else {
+        'EvaluatedCompliant'
+    }
+
+    [PSCustomObject]@{
+        State                 = $state
+        EvaluatedResources    = [math]::Max(0, $EvaluatedResources)
+        CompliantResources    = [math]::Max(0, $CompliantResources)
+        NonCompliantResources = [math]::Max(0, $NonCompliantResources)
+        DataQuality           = New-DataQuality `
+            -QueryName $QueryName `
+            -QuerySucceeded $QuerySucceeded `
+            -RecordCount $QueryRecordCount `
+            -Timestamp $Timestamp `
+            -FallbackUsed $FallbackUsed `
+            -ErrorMessage $ErrorMessage
+    }
+}
+
+function Resolve-QuickAssessmentPosture {
+    param(
+        [Parameter(Mandatory)][ValidateSet('DataUnavailable', 'NotEvaluated', 'EvaluatedCompliant', 'EvaluatedNonCompliant')][string]$ComplianceState,
+        [int]$HighRiskPolicyCount = 0,
+        [int]$HighSecurityDoNotEnforceCount = 0,
+        [int]$NonCompliantObservationCount = 0,
+        [int]$AuditOnlyCount = 0
+    )
+
+    if ($ComplianceState -eq 'DataUnavailable') { return '⚪ Data Unavailable' }
+    if ($ComplianceState -eq 'NotEvaluated') { return '⚪ Not Evaluated' }
+    if ($HighRiskPolicyCount -eq 0 -and $NonCompliantObservationCount -eq 0 -and $AuditOnlyCount -eq 0) { return '✅ Excellent' }
+    if ($HighSecurityDoNotEnforceCount -eq 0 -and $NonCompliantObservationCount -le 10) { return '🟢 Good' }
+    if ($HighRiskPolicyCount -le 5 -and $NonCompliantObservationCount -le 50) { return '🟠 Needs Improvement' }
+    '🔴 At Risk'
+}
+
+function Resolve-EffectivePolicyEffects {
+    param(
+        [AllowNull()]$Effect,
+        [AllowNull()]$AssignmentParameters
+    )
+
+    $canonicalEffects = @{
+        'append'            = 'Append'
+        'audit'             = 'Audit'
+        'auditifnotexists'  = 'AuditIfNotExists'
+        'deny'              = 'Deny'
+        'denyaction'        = 'DenyAction'
+        'deployifnotexists' = 'DeployIfNotExists'
+        'dine'              = 'DeployIfNotExists'
+        'disabled'          = 'Disabled'
+        'manual'            = 'Manual'
+        'modify'            = 'Modify'
+        'parameterised'     = 'Parameterised'
+        'parameterized'     = 'Parameterised'
+    }
+    $effectPriority = @(
+        'Deny', 'DenyAction', 'DeployIfNotExists', 'Modify',
+        'AuditIfNotExists', 'Audit', 'Append', 'Manual', 'Disabled',
+        'Parameterised', 'Unknown'
+    )
+    $resolvedEffects = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $rawEffect = if ($null -eq $Effect) { '' } else { (@($Effect) -join ', ') }
+    $isParameterised = $rawEffect -match '(?i)parameteri[sz]ed|\[\s*parameters\s*\('
+
+    $parameterNames = @([regex]::Matches($rawEffect, '(?i)parameters\s*\(\s*[''"]([^''"]+)[''"]\s*\)') |
+        ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    $parameterObject = $AssignmentParameters
+    if ($AssignmentParameters -is [string] -and -not [string]::IsNullOrWhiteSpace($AssignmentParameters)) {
+        try { $parameterObject = $AssignmentParameters | ConvertFrom-Json -ErrorAction Stop } catch { $parameterObject = $null }
+    }
+
+    if ($parameterObject -and $parameterNames.Count -eq 0 -and $isParameterised) {
+        $parameterNames = @($parameterObject.PSObject.Properties.Name | Where-Object { $_ -match '(?i)effect' })
+        if ($parameterObject -is [System.Collections.IDictionary]) {
+            $parameterNames = @($parameterObject.Keys | Where-Object { $_ -match '(?i)effect' })
+        }
+    }
+
+    foreach ($parameterName in $parameterNames) {
+        $parameterEntry = if ($parameterObject -is [System.Collections.IDictionary]) {
+            $parameterObject[$parameterName]
+        } elseif ($parameterObject) {
+            $property = $parameterObject.PSObject.Properties[$parameterName]
+            if ($property) { $property.Value }
+        }
+        $parameterValue = if ($parameterEntry -is [System.Collections.IDictionary] -and $parameterEntry.Contains('value')) {
+            $parameterEntry['value']
+        } elseif ($parameterEntry -and $parameterEntry.PSObject.Properties['value']) {
+            $parameterEntry.value
+        } else {
+            $parameterEntry
+        }
+        foreach ($value in @($parameterValue)) {
+            $key = "$value".Trim().ToLowerInvariant()
+            if ($canonicalEffects.ContainsKey($key)) { [void]$resolvedEffects.Add($canonicalEffects[$key]) }
+        }
+    }
+
+    $effectPattern = '(?i)(DeployIfNotExists|AuditIfNotExists|DenyAction|Parameterised|Parameterized|Disabled|Modify|Append|Manual|DINE|Deny|Audit)'
+    foreach ($match in [regex]::Matches($rawEffect, $effectPattern)) {
+        $key = $match.Value.ToLowerInvariant()
+        $canonical = $canonicalEffects[$key]
+        if ($canonical -eq 'Parameterised' -and $parameterNames.Count -gt 0 -and $resolvedEffects.Count -gt 0) { continue }
+        [void]$resolvedEffects.Add($canonical)
+    }
+
+    if ($resolvedEffects.Count -eq 0) {
+        [void]$resolvedEffects.Add($(if ($isParameterised) { 'Parameterised' } else { 'Unknown' }))
+    }
+
+    $effectiveEffects = @($effectPriority | Where-Object { $resolvedEffects.Contains($_) })
+    $primaryEffect = $effectiveEffects | Select-Object -First 1
+
+    [PSCustomObject]@{
+        EffectiveEffects = $effectiveEffects
+        PrimaryEffect    = $primaryEffect
+        IsPreventive     = @($effectiveEffects | Where-Object { $_ -in @('Deny', 'DenyAction') }).Count -gt 0
+        IsDetective      = @($effectiveEffects | Where-Object { $_ -in @('Audit', 'AuditIfNotExists', 'Manual') }).Count -gt 0
+        IsRemediating    = @($effectiveEffects | Where-Object { $_ -in @('DeployIfNotExists', 'Modify') }).Count -gt 0
+        IsParameterised  = $isParameterised
+        IsDisabled       = $effectiveEffects.Count -gt 0 -and @($effectiveEffects | Where-Object { $_ -ne 'Disabled' }).Count -eq 0
+    }
+}
+
+function Get-EffectivePolicyEffectCounts {
+    param([Parameter(Mandatory)][array]$PolicyResults)
+
+    $normalizedAssignments = @($PolicyResults | ForEach-Object {
+        $effectiveEffectsProperty = $_.PSObject.Properties['Effective Effects']
+        if (-not $effectiveEffectsProperty) { $effectiveEffectsProperty = $_.PSObject.Properties['effectiveEffects'] }
+        $effectiveEffects = if ($effectiveEffectsProperty -and @($effectiveEffectsProperty.Value).Count -gt 0) {
+            @($effectiveEffectsProperty.Value)
+        } else {
+            $rawEffectProperty = $_.PSObject.Properties['Effect Type']
+            if (-not $rawEffectProperty) { $rawEffectProperty = $_.PSObject.Properties['effectType'] }
+            @((Resolve-EffectivePolicyEffects -Effect $(if ($rawEffectProperty) { $rawEffectProperty.Value } else { $null })).EffectiveEffects)
+        }
+
+        [PSCustomObject]@{
+            Effects       = $effectiveEffects
+            IsPreventive  = @($effectiveEffects | Where-Object { $_ -in @('Deny', 'DenyAction') }).Count -gt 0
+            IsDetective   = @($effectiveEffects | Where-Object { $_ -in @('Audit', 'AuditIfNotExists', 'Manual') }).Count -gt 0
+            IsRemediating = @($effectiveEffects | Where-Object { $_ -in @('DeployIfNotExists', 'Modify') }).Count -gt 0
+            IsDisabled    = $effectiveEffects.Count -gt 0 -and @($effectiveEffects | Where-Object { $_ -ne 'Disabled' }).Count -eq 0
+        }
+    })
+
+    $allEffects = @($normalizedAssignments | ForEach-Object { $_.Effects })
+    $breakdown = @($allEffects | Group-Object | Sort-Object Name | ForEach-Object {
+        [PSCustomObject]@{ Effect = $_.Name; Count = $_.Count }
+    })
+
+    [PSCustomObject]@{
+        Deny              = @($normalizedAssignments | Where-Object { $_.Effects -contains 'Deny' -or $_.Effects -contains 'DenyAction' }).Count
+        Audit             = @($normalizedAssignments | Where-Object { $_.Effects -contains 'Audit' -or $_.Effects -contains 'AuditIfNotExists' }).Count
+        DeployIfNotExists = @($normalizedAssignments | Where-Object { $_.Effects -contains 'DeployIfNotExists' }).Count
+        Modify            = @($normalizedAssignments | Where-Object { $_.Effects -contains 'Modify' }).Count
+        Remediating       = @($normalizedAssignments | Where-Object IsRemediating).Count
+        Disabled          = @($normalizedAssignments | Where-Object IsDisabled).Count
+        Breakdown         = $breakdown
+    }
+}
+
+function New-AssessmentFinding {
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][ValidateSet('Critical', 'High', 'Medium', 'Low', 'Info')][string]$Severity,
+        [Parameter(Mandatory)][string]$Category,
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)]$Evidence,
+        [string[]]$AssignmentIds = @(),
+        [string[]]$ScopeIds = @(),
+        [Parameter(Mandatory)][string]$Recommendation,
+        [string[]]$VerificationSteps = @(),
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][ValidateSet('High', 'Medium', 'Low')][string]$Confidence
+    )
+
+    [PSCustomObject][ordered]@{
+        Id                = $Id
+        Severity          = $Severity
+        Category          = $Category
+        Title             = $Title
+        Evidence          = $Evidence
+        AssignmentIds     = @($AssignmentIds | Where-Object { $_ } | Select-Object -Unique)
+        ScopeIds          = @($ScopeIds | Where-Object { $_ } | Select-Object -Unique)
+        Recommendation    = $Recommendation
+        VerificationSteps = @($VerificationSteps)
+        Source            = $Source
+        Confidence        = $Confidence
+    }
+}
+
+function Get-AssessmentFindingId {
+    param(
+        [Parameter(Mandatory)][string]$Category,
+        [Parameter(Mandatory)][string]$Identity
+    )
+
+    $prefix = ($Category -replace '[^A-Za-z0-9]', '').ToUpperInvariant()
+    if ($prefix.Length -gt 8) { $prefix = $prefix.Substring(0, 8) }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes("$Category|$Identity".ToLowerInvariant())
+    $hash = [System.Security.Cryptography.SHA256]::HashData($bytes)
+    $suffix = ([System.BitConverter]::ToString($hash) -replace '-', '').Substring(0, 10)
+    "F-$prefix-$suffix"
+}
+
+function Resolve-RemediationEvidenceState {
+    param(
+        [Parameter(Mandatory)]$Evidence,
+        [bool]$TaskQuerySucceeded,
+        [bool]$RoleQuerySucceeded
+    )
+
+    $requiredRoles = @($Evidence.RequiredRoles ?? $Evidence.requiredRoles) | Where-Object { $_ }
+    $availableRoles = @($Evidence.AvailableRoles ?? $Evidence.availableRoles) | Where-Object { $_ }
+    $availableRoleSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($role in $availableRoles) { [void]$availableRoleSet.Add([string]$role) }
+    $missingRoles = if ($RoleQuerySucceeded) { @($requiredRoles | Where-Object { -not $availableRoleSet.Contains([string]$_) }) } else { @() }
+
+    $taskId = [string]($Evidence.TaskId ?? $Evidence.remediationId)
+    $taskState = [string]($Evidence.TaskState ?? $Evidence.state)
+    $taskError = [string]($Evidence.TaskError ?? $Evidence.error)
+    $failedDeployments = [int]($Evidence.FailedDeployments ?? 0)
+    $applicableResourceCount = if ($null -ne $Evidence.ApplicableResourceCount) { [Nullable[int]][int]$Evidence.ApplicableResourceCount } else { $null }
+    $conditions = [System.Collections.Generic.List[string]]::new()
+
+    if ($RoleQuerySucceeded -and $missingRoles.Count -gt 0) { [void]$conditions.Add('MissingPermissions') }
+    if ($TaskQuerySucceeded) {
+        if ($taskState -match '^(Failed|Canceled|Cancelled)$' -or $failedDeployments -gt 0 -or $taskError) {
+            [void]$conditions.Add('Failed')
+        } elseif ($taskState -match '^(Accepted|Running|Evaluating|Pending|InProgress)$') {
+            [void]$conditions.Add('Pending')
+        } elseif (-not $taskId -and $null -ne $applicableResourceCount -and $applicableResourceCount -gt 0) {
+            [void]$conditions.Add('NotStarted')
+        }
+    }
+
+    $state = if (-not $TaskQuerySucceeded) {
+        'NotAssessed'
+    } elseif ($conditions.Contains('Failed')) {
+        'Failed'
+    } elseif ($conditions.Contains('MissingPermissions')) {
+        'MissingPermissions'
+    } elseif ($conditions.Contains('Pending')) {
+        'Pending'
+    } elseif ($conditions.Contains('NotStarted')) {
+        'NotStarted'
+    } elseif ($taskState -match '^(Succeeded|Complete|Completed)$' -and $taskId) {
+        'Succeeded'
+    } elseif (-not $taskId -and $null -ne $applicableResourceCount -and $applicableResourceCount -eq 0) {
+        'NotRequired'
+    } else {
+        'NotAssessed'
+    }
+
+    [PSCustomObject][ordered]@{
+        State = $state
+        Conditions = @($conditions)
+        TaskId = $taskId
+        TaskState = $taskState
+        TaskError = $taskError
+        RequiredRoles = @($requiredRoles)
+        AvailableRoles = @($availableRoles)
+        MissingRoles = @($missingRoles)
+        ApplicableResourceCount = $applicableResourceCount
+        LastEvaluation = [string]$Evidence.LastEvaluation
+        TaskQuerySucceeded = $TaskQuerySucceeded
+        RoleQuerySucceeded = $RoleQuerySucceeded
+    }
+}
+
+function New-RemediationEvidence {
+    param(
+        [Parameter(Mandatory)][string]$AssignmentId,
+        [string]$Scope = '',
+        [string]$IdentityType = 'None',
+        [string]$PrincipalId = '',
+        [array]$RequiredRoles = @(),
+        [array]$RoleAssignments = @(),
+        [array]$TaskRecords = @(),
+        [bool]$TaskQuerySucceeded,
+        [bool]$RoleQuerySucceeded,
+        [string]$TaskQueryError = '',
+        [string]$RoleQueryError = '',
+        [datetime]$EvidenceTimestamp = [datetime]::UtcNow,
+        [Nullable[int]]$ApplicableResourceCount = $null,
+        [string]$LastEvaluation = '',
+        [array]$Exemptions = @(),
+        [array]$NotScopes = @(),
+        [array]$ResourceSelectors = @(),
+        [array]$Overrides = @()
+    )
+
+    $normalizedScope = $Scope.TrimEnd('/').ToLowerInvariant()
+    $normalizedTaskRecords = @($TaskRecords | Where-Object { $null -ne $_ })
+    $normalizedExemptions = @($Exemptions | Where-Object { $null -ne $_ })
+    $normalizedNotScopes = @($NotScopes | Where-Object { $null -ne $_ })
+    $normalizedResourceSelectors = @($ResourceSelectors | Where-Object { $null -ne $_ })
+    $normalizedOverrides = @($Overrides | Where-Object { $null -ne $_ })
+    $availableRoles = @($RoleAssignments | Where-Object { $null -ne $_ } | Where-Object {
+        $roleScope = [string]$_.Scope
+        $principalMatches = -not $PrincipalId -or [string]::Equals([string]$_.PrincipalId, $PrincipalId, [System.StringComparison]::OrdinalIgnoreCase)
+        $scopeMatches = -not $normalizedScope -or (-not $roleScope) -or $normalizedScope.StartsWith($roleScope.TrimEnd('/').ToLowerInvariant())
+        $principalMatches -and $scopeMatches
+    } | ForEach-Object {
+        $roleDefinitionId = [string]$_.RoleDefinitionId
+        if ($roleDefinitionId -match '/([^/]+)$') { $Matches[1] } else { $roleDefinitionId }
+    } | Where-Object { $_ } | Select-Object -Unique)
+
+    $selectedTask = @($normalizedTaskRecords | Sort-Object @{
+        Expression = {
+            $timestamp = $_.LastUpdated ?? $_.CreatedOn
+            if ($timestamp) { try { [datetime]$timestamp } catch { [datetime]::MinValue } } else { [datetime]::MinValue }
+        }
+        Descending = $true
+    } | Select-Object -First 1)
+    if ($selectedTask.Count -gt 0) { $selectedTask = $selectedTask[0] } else { $selectedTask = $null }
+
+    $stateEvidence = [PSCustomObject]@{
+        TaskId = if ($selectedTask) { [string]$selectedTask.TaskId } else { '' }
+        TaskState = if ($selectedTask) { [string]$selectedTask.State } else { '' }
+        TaskError = if ($selectedTask) { [string]$selectedTask.Error } else { '' }
+        FailedDeployments = if ($selectedTask) { [int]($selectedTask.FailedDeployments ?? 0) } else { 0 }
+        RequiredRoles = @($RequiredRoles | ForEach-Object { if ([string]$_ -match '/([^/]+)$') { $Matches[1] } else { [string]$_ } } | Where-Object { $_ } | Select-Object -Unique)
+        AvailableRoles = $availableRoles
+        ApplicableResourceCount = $ApplicableResourceCount
+        LastEvaluation = $LastEvaluation
+    }
+    $resolvedState = Resolve-RemediationEvidenceState -Evidence $stateEvidence -TaskQuerySucceeded $TaskQuerySucceeded -RoleQuerySucceeded $RoleQuerySucceeded
+
+    [PSCustomObject][ordered]@{
+        AssignmentId = $AssignmentId
+        State = $resolvedState.State
+        Conditions = @($resolvedState.Conditions)
+        ManagedIdentityPresent = $IdentityType -and $IdentityType -ne 'None' -and $PrincipalId
+        IdentityType = if ($IdentityType) { $IdentityType } else { 'None' }
+        PrincipalId = $PrincipalId
+        RequiredRoles = @($resolvedState.RequiredRoles)
+        AvailableRoles = @($resolvedState.AvailableRoles)
+        MissingRoles = @($resolvedState.MissingRoles)
+        TaskRecords = $normalizedTaskRecords
+        SelectedTaskId = $resolvedState.TaskId
+        SelectedTaskState = $resolvedState.TaskState
+        Error = $resolvedState.TaskError
+        ApplicableResourceCount = $resolvedState.ApplicableResourceCount
+        LastEvaluation = $resolvedState.LastEvaluation
+        Exemptions = $normalizedExemptions
+        NotScopes = $normalizedNotScopes
+        ResourceSelectors = $normalizedResourceSelectors
+        Overrides = $normalizedOverrides
+        TaskQuerySucceeded = $TaskQuerySucceeded
+        RoleQuerySucceeded = $RoleQuerySucceeded
+        TaskQueryError = $TaskQueryError
+        RoleQueryError = $RoleQueryError
+        EvidenceTimestamp = $EvidenceTimestamp.ToString('o')
+    }
+}
+
+function New-AssessmentFindings {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$PolicyResults,
+        [hashtable]$ALZData = $null
+    )
+
+    $findings = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($policy in $PolicyResults) {
+        $assignmentId = if ($policy.'Assignment ID') { $policy.'Assignment ID' } else { $policy.'Assignment Name' }
+        $scopeId = if ($policy.Scope) { $policy.Scope } else { $policy.'Scope Name' }
+        $displayName = $policy.'Display Name'
+        $ncResources = if ($policy.'Non-Compliant Resources' -match '^\d+$') { [int]$policy.'Non-Compliant Resources' } else { 0 }
+
+        if ($policy.'Enforcement Mode' -eq 'DoNotEnforce' -and $policy.'Security Impact' -in @('High', 'Medium')) {
+            $severity = if ($policy.'Security Impact' -eq 'High') { 'Critical' } else { 'High' }
+            $id = Get-AssessmentFindingId -Category 'EnforcementGap' -Identity $assignmentId
+            $findings.Add((New-AssessmentFinding -Id $id -Severity $severity -Category 'Enforcement Gap' `
+                -Title "Enforcement disabled for '$displayName'" `
+                -Evidence ([ordered]@{ EnforcementMode = $policy.'Enforcement Mode'; SecurityImpact = $policy.'Security Impact'; Effect = $policy.'Primary Effect'; NonCompliantResources = $ncResources }) `
+                -AssignmentIds @($assignmentId) -ScopeIds @($scopeId) `
+                -Recommendation "Validate impact, then change '$displayName' from DoNotEnforce to Default enforcement." `
+                -VerificationSteps @('Confirm the assignment is intended to enforce its configured effect.', 'Test the change in a controlled scope.', 'Verify the assignment enforcementMode is Default after deployment.') `
+                -Source 'Azure Policy assignment inventory' -Confidence 'High'))
+        }
+
+        if ($policy.'Cost Exposure' -eq 'High') {
+            $id = Get-AssessmentFindingId -Category 'CostExposure' -Identity $assignmentId
+            $findings.Add((New-AssessmentFinding -Id $id -Severity 'Medium' -Category 'Cost Exposure' `
+                -Title "High cost exposure heuristic for '$displayName'" `
+                -Evidence ([ordered]@{ CostExposure = $policy.'Cost Exposure'; Category = $policy.Category; Effects = @($policy.'Effective Effects'); EnforcementMode = $policy.'Enforcement Mode' }) `
+                -AssignmentIds @($assignmentId) -ScopeIds @($scopeId) `
+                -Recommendation "Review the services deployed or configured by '$displayName' and validate expected cost with official pricing or Cost Management data." `
+                -VerificationSteps @('Identify resources deployed or modified by the policy.', 'Validate region and SKU assumptions.', 'Confirm actual cost in Azure Cost Management when available.') `
+                -Source 'Deterministic cost-impact heuristic' -Confidence 'Medium'))
+        }
+
+        if ($policy.'Is Remediating' -and $policy.'Remediation Evidence') {
+            $remediationEvidence = $policy.'Remediation Evidence'
+            foreach ($condition in @($remediationEvidence.Conditions)) {
+                $findingConfig = switch ($condition) {
+                    'NotStarted' {
+                        @{
+                            Category = 'Remediation Not Started'; Severity = 'Medium'
+                            Title = "Remediation not started for '$displayName'"
+                            Recommendation = "Create and monitor an approved remediation task for '$displayName'."
+                            Verification = @('Confirm applicable resources and exclusions.', 'Create the remediation task.', 'Verify task state and deployment counts after execution.')
+                            Source = 'Azure Resource Graph remediation tasks and policy states'
+                        }
+                    }
+                    'Failed' {
+                        @{
+                            Category = 'Remediation Failed'; Severity = 'High'
+                            Title = "Remediation task failed for '$displayName'"
+                            Recommendation = "Review the recorded remediation error for '$displayName', correct the cause, and retry with a new or updated task."
+                            Verification = @('Review the task error and failed deployment count.', 'Correct permissions, template, or scope issues.', 'Retry and verify a subsequent task reaches Succeeded.')
+                            Source = 'Azure Resource Graph remediation task state'
+                        }
+                    }
+                    'Pending' {
+                        @{
+                            Category = 'Remediation Pending'; Severity = 'Medium'
+                            Title = "Remediation task pending for '$displayName'"
+                            Recommendation = "Monitor the current remediation task for '$displayName' and investigate only if it stops progressing or records failures."
+                            Verification = @('Confirm the latest task state and timestamp.', 'Compare successful, failed, and total deployments.', 'Recheck policy state after task completion.')
+                            Source = 'Azure Resource Graph remediation task state'
+                        }
+                    }
+                    'MissingPermissions' {
+                        @{
+                            Category = 'Remediation Permissions'; Severity = 'High'
+                            Title = "Required remediation roles missing for '$displayName'"
+                            Recommendation = "Grant the assignment managed identity only the required missing roles at an applicable scope for '$displayName'."
+                            Verification = @('Confirm the assignment principal ID.', 'Validate each required role definition against effective role assignments.', 'Re-run evidence collection after role propagation.')
+                            Source = 'Azure Resource Graph policy definitions and role assignments'
+                        }
+                    }
+                }
+                if (-not $findingConfig) { continue }
+                $id = Get-AssessmentFindingId -Category $findingConfig.Category -Identity $assignmentId
+                $findings.Add((New-AssessmentFinding -Id $id -Severity $findingConfig.Severity -Category $findingConfig.Category `
+                    -Title $findingConfig.Title `
+                    -Evidence ([ordered]@{
+                        State = $remediationEvidence.State
+                        TaskId = $remediationEvidence.SelectedTaskId
+                        TaskState = $remediationEvidence.SelectedTaskState
+                        Error = $remediationEvidence.Error
+                        ApplicableResources = $remediationEvidence.ApplicableResourceCount
+                        LastEvaluation = $remediationEvidence.LastEvaluation
+                        RequiredRoles = @($remediationEvidence.RequiredRoles)
+                        AvailableRoles = @($remediationEvidence.AvailableRoles)
+                        MissingRoles = @($remediationEvidence.MissingRoles)
+                        Exemptions = @($remediationEvidence.Exemptions)
+                        NotScopes = @($remediationEvidence.NotScopes)
+                        ResourceSelectors = @($remediationEvidence.ResourceSelectors)
+                        Overrides = @($remediationEvidence.Overrides)
+                    }) `
+                    -AssignmentIds @($assignmentId) -ScopeIds @($scopeId) `
+                    -Recommendation $findingConfig.Recommendation -VerificationSteps $findingConfig.Verification `
+                    -Source $findingConfig.Source -Confidence 'High'))
+            }
+
+            if ($remediationEvidence.State -eq 'NotAssessed' -and $ncResources -gt 0) {
+                $id = Get-AssessmentFindingId -Category 'RemediationEvidence' -Identity $assignmentId
+                $findings.Add((New-AssessmentFinding -Id $id -Severity 'Medium' -Category 'Remediation Evidence' `
+                    -Title "Remediation state not assessed for '$displayName'" `
+                    -Evidence ([ordered]@{
+                        State = 'NotAssessed'
+                        TaskQuerySucceeded = $remediationEvidence.TaskQuerySucceeded
+                        RoleQuerySucceeded = $remediationEvidence.RoleQuerySucceeded
+                        TaskQueryError = $remediationEvidence.TaskQueryError
+                        RoleQueryError = $remediationEvidence.RoleQueryError
+                        ApplicableResources = $remediationEvidence.ApplicableResourceCount
+                        LastEvaluation = $remediationEvidence.LastEvaluation
+                    }) `
+                    -AssignmentIds @($assignmentId) -ScopeIds @($scopeId) `
+                    -Recommendation "Restore remediation task and role evidence collection before classifying '$displayName' as working or failed." `
+                    -VerificationSteps @('Review ARG query errors and permissions.', 'Re-run task and role evidence queries.', 'Classify remediation only after explicit evidence is available.') `
+                    -Source 'Remediation evidence data quality' -Confidence 'High'))
+            }
+        }
+
+        if ($ncResources -gt 0) {
+            $severity = if ($policy.'Risk Level' -eq 'High' -or $ncResources -gt 50) { 'Critical' } else { 'High' }
+            $id = Get-AssessmentFindingId -Category 'ActiveNonCompliance' -Identity $assignmentId
+            $findings.Add((New-AssessmentFinding -Id $id -Severity $severity -Category 'Non-Compliance' `
+                -Title "$ncResources non-compliant resources for '$displayName'" `
+                -Evidence ([ordered]@{ NonCompliantResources = $ncResources; RiskLevel = $policy.'Risk Level'; ComplianceState = $policy.'Compliance State' }) `
+                -AssignmentIds @($assignmentId) -ScopeIds @($scopeId) `
+                -Recommendation "Remediate the $ncResources non-compliant resources for '$displayName'." `
+                -VerificationSteps @('Review the non-compliant resource list.', 'Apply the approved remediation.', 'Confirm a subsequent policy evaluation reports the expected state.') `
+                -Source 'Azure Policy compliance state' -Confidence 'High'))
+        }
+
+        if ($policy.'Is Disabled') {
+            $id = Get-AssessmentFindingId -Category 'DisabledPolicy' -Identity $assignmentId
+            $findings.Add((New-AssessmentFinding -Id $id -Severity 'Low' -Category 'Housekeeping' `
+                -Title "Disabled policy '$displayName'" `
+                -Evidence ([ordered]@{ IsDisabled = $true; Effect = $policy.'Primary Effect' }) `
+                -AssignmentIds @($assignmentId) -ScopeIds @($scopeId) `
+                -Recommendation "Review disabled policy '$displayName' and remove it if it is no longer required." `
+                -VerificationSteps @('Confirm the business owner and intended state.', 'Remove or re-enable the assignment.', 'Verify the policy inventory after the change.') `
+                -Source 'Azure Policy assignment inventory' -Confidence 'High'))
+        }
+    }
+
+    $PolicyResults | Group-Object Scope | ForEach-Object {
+        $scopeResults = @($_.Group)
+        if ((Get-EffectivePolicyEffectCounts -PolicyResults $scopeResults).Deny -eq 0) {
+            $scopeId = if ($_.Name) { $_.Name } else { $scopeResults[0].'Scope Name' }
+            $assignmentIds = @($scopeResults | ForEach-Object { if ($_.'Assignment ID') { $_.'Assignment ID' } else { $_.'Assignment Name' } })
+            $id = Get-AssessmentFindingId -Category 'MissingPreventiveControl' -Identity $scopeId
+            $findings.Add((New-AssessmentFinding -Id $id -Severity 'Medium' -Category 'Missing Controls' `
+                -Title "No directly assigned Deny effect detected at '$($scopeResults[0].'Scope Name')'" `
+                -Evidence ([ordered]@{ DirectAssignmentCount = $scopeResults.Count; DirectPreventiveCount = 0; ScopeName = $scopeResults[0].'Scope Name'; InheritedCoverageEvaluated = $false }) `
+                -AssignmentIds $assignmentIds -ScopeIds @($scopeId) `
+                -Recommendation "Verify inherited Deny coverage at '$($scopeResults[0].'Scope Name')', then assess whether a direct preventive assignment is required." `
+                -VerificationSteps @('Review inherited and directly assigned preventive controls.', 'Confirm which Deny controls are applicable.', 'Verify effective assignments after deployment.') `
+                -Source 'Direct assignment inventory and normalized effects' -Confidence 'Medium'))
+        }
+    }
+
+    if ($ALZData -and $ALZData.MissingPolicies) {
+        $ALZData.MissingPolicies | Group-Object Category | ForEach-Object {
+            $id = Get-AssessmentFindingId -Category 'ALZInventoryGap' -Identity $_.Name
+            $assetNoun = if ($_.Count -eq 1) { 'asset' } else { 'assets' }
+            $findings.Add((New-AssessmentFinding -Id $id -Severity 'High' -Category 'ALZ Inventory' `
+                -Title "$($_.Count) applicable ALZ $assetNoun not detected in '$($_.Name)'" `
+                -Evidence ([ordered]@{ ApplicableGapAssets = @($_.Group.PolicyPattern); Count = $_.Count; SourceVersion = $ALZData.SourceVersion; SourceRetrievedAt = $ALZData.SourceRetrievedAt }) `
+                -ScopeIds @('Tenant-wide') `
+                -Recommendation "Review and deploy or document an approved exception for the applicable ALZ assets in '$($_.Name)'." `
+                -VerificationSteps @('Confirm the ALZ source version and retrieval timestamp.', 'Reconfirm asset applicability and parameters.', 'Verify effective assignments for applicable assets.') `
+                -Source 'Official ALZ Library inventory comparison' -Confidence 'Medium'))
+        }
+    }
+
+    @($findings | Sort-Object Id -Unique)
+}
+
+function New-CEPAssessmentFindings {
+    param(
+        [Parameter(Mandatory)]$CEPAssessment,
+        [array]$CEPTestResults = @()
+    )
+
+    if (-not $CEPAssessment.Requested) { return @() }
+
+    $findings = [System.Collections.Generic.List[object]]::new()
+
+    if ($CEPAssessment.State -eq 'PrerequisiteUnavailable' -or $CEPAssessment.MappingState -eq 'Unavailable') {
+        $reason = if ($CEPAssessment.PrerequisiteReason) { $CEPAssessment.PrerequisiteReason } else { 'CE initiative definition unavailable' }
+        $id = Get-AssessmentFindingId -Category 'CEP Prerequisite' -Identity "$($CEPAssessment.MappingState)|$reason"
+        $findings.Add((New-AssessmentFinding -Id $id -Severity 'Medium' -Category 'CEP Prerequisite' `
+            -Title 'CE policy mapping prerequisite unavailable' `
+            -Evidence ([ordered]@{
+                Fact = $reason
+                Interpretation = 'Policy-based CE mapping is unavailable; this is not a failed security control.'
+                AssessmentState = $CEPAssessment.State
+                MappingState = $CEPAssessment.MappingState
+                MappingSourceState = $CEPAssessment.MappingSourceState
+                ConfiguredDefinitionId = $CEPAssessment.DefinitionId
+                ConfiguredDefinitionVersion = $CEPAssessment.DefinitionVersion
+                CandidateDefinitions = @($CEPAssessment.CandidateDefinitions)
+                ScoreState = $CEPAssessment.ScoreState
+            }) `
+            -ScopeIds @('Tenant-wide') `
+            -Recommendation 'Select a supported mapping source or configure an explicit CE initiative definition ID.' `
+            -VerificationSteps @('Check current built-in policy set definitions.', 'Verify Microsoft.Authorization provider and query availability.', 'Confirm the supported CE mapping source and definition ID.') `
+            -Source 'Azure Policy built-in definition discovery' -Confidence 'Medium'))
+    }
+
+    $technicalFindings = @($CEPTestResults | Where-Object {
+        $_.'Test #' -match '^TC[1-5]$' -and $_.Status -in @('FAIL', 'WARN')
+    })
+    foreach ($testResult in $technicalFindings) {
+        $testId = [string]$testResult.'Test #'
+        $testName = [string]$testResult.'Test Name'
+        $normalizedTestName = $testName -replace ('(?i)^{0}\s*:\s*' -f [regex]::Escape($testId)), ''
+        $status = [string]$testResult.Status
+        $assignmentIds = @(@('AssignmentId', 'Assignment ID') | ForEach-Object {
+            $property = $testResult.PSObject.Properties[$_]
+            if ($property -and $property.Value) { [string]$property.Value }
+        })
+        $scopeIds = @(@('ScopeId', 'Scope ID', 'Scope') | ForEach-Object {
+            $property = $testResult.PSObject.Properties[$_]
+            if ($property -and $property.Value) { [string]$property.Value }
+        })
+        if ($scopeIds.Count -eq 0) { $scopeIds = @('Tenant-wide') }
+        $id = Get-AssessmentFindingId -Category 'CEP Technical Control' -Identity "$testId|$status|$testName"
+        $findings.Add((New-AssessmentFinding -Id $id -Severity $(if ($status -eq 'FAIL') { 'High' } else { 'Medium' }) -Category 'CEP Technical Control' `
+            -Title "$testId`: $normalizedTestName requires review" `
+            -Evidence ([ordered]@{
+                Fact = "$testId returned $status."
+                Interpretation = 'The technical result identifies a potential CE+ control gap within the evidence available to the automated assessment.'
+                TestId = $testId
+                Status = $status
+                Details = $testResult.Details
+                NonCompliant = $testResult.'Non-Compliant'
+                Compliant = $testResult.Compliant
+                TotalResources = $testResult.'Total Resources'
+            }) `
+            -AssignmentIds $assignmentIds -ScopeIds $scopeIds `
+            -Recommendation "Review and remediate the evidence reported by $testId, then rerun the technical assessment." `
+            -VerificationSteps @('Review the underlying Azure Resource Graph or Defender evidence.', 'Confirm applicability at the affected assignments and scopes.', 'Rerun the technical check after remediation.') `
+            -Source 'NCSC CE+ v3.2 technical assessment mapped to Azure Resource Graph' `
+            -Confidence $(if ($status -eq 'FAIL') { 'High' } else { 'Medium' })))
+    }
+
+    $skippedResults = @($CEPTestResults | Where-Object Status -eq 'SKIP')
+    $dataQualityState = if ($CEPAssessment.DataQuality -and $CEPAssessment.DataQuality.State) { [string]$CEPAssessment.DataQuality.State } else { 'Unknown' }
+    if ($CEPAssessment.State -in @('PrerequisiteUnavailable', 'PartiallyEvaluated', 'EvaluationFailed') -or $skippedResults.Count -gt 0 -or $dataQualityState -in @('Partial', 'Unavailable', 'Failed')) {
+        $skippedIds = @($skippedResults | ForEach-Object { $_.'Test #' } | Sort-Object -Unique)
+        $id = Get-AssessmentFindingId -Category 'CEP Data Quality' -Identity "$($CEPAssessment.State)|$dataQualityState|$($skippedIds -join ',')"
+        $findings.Add((New-AssessmentFinding -Id $id -Severity $(if ($CEPAssessment.State -eq 'EvaluationFailed') { 'High' } else { 'Medium' }) -Category 'CEP Data Quality' `
+            -Title 'CEP evidence is incomplete or unavailable' `
+            -Evidence ([ordered]@{
+                Fact = "$($skippedResults.Count) CEP test result(s) were skipped; data quality state is $dataQualityState."
+                Interpretation = 'Missing or failed evidence limits the conclusions supported by the CEP assessment.'
+                AssessmentState = $CEPAssessment.State
+                DataQualityState = $dataQualityState
+                SkippedTestIds = $skippedIds
+                Limitations = @($CEPAssessment.DataQuality.Limitations)
+            }) `
+            -ScopeIds @('Tenant-wide') `
+            -Recommendation 'Resolve unavailable CEP evidence sources and rerun the affected checks.' `
+            -VerificationSteps @('Review skipped test details and data-quality limitations.', 'Verify access to the required Azure data providers.', 'Confirm the rerun returns evaluated evidence.') `
+            -Source 'CEP assessment execution and data-quality metadata' `
+            -Confidence $(if ($CEPAssessment.State -eq 'EvaluationFailed') { 'High' } else { 'Medium' })))
+    }
+
+    $manualResults = @($CEPTestResults | Where-Object Status -eq 'MANUAL')
+    if ($manualResults.Count -gt 0) {
+        $manualIds = @($manualResults | ForEach-Object { $_.'Test #' } | Sort-Object -Unique)
+        $id = Get-AssessmentFindingId -Category 'CEP Manual Verification' -Identity ($manualIds -join ',')
+        $findings.Add((New-AssessmentFinding -Id $id -Severity 'Medium' -Category 'CEP Manual Verification' `
+            -Title "$($manualResults.Count) CEP checks require manual verification" `
+            -Evidence ([ordered]@{
+                Fact = "$($manualResults.Count) CE+ test item(s) cannot be verified automatically."
+                Interpretation = 'The automated assessment is incomplete until the specified manual procedures are performed and recorded.'
+                TestIds = $manualIds
+                Tests = @($manualResults | ForEach-Object { $_.'Test Name' })
+            }) `
+            -ScopeIds @('Tenant-wide') `
+            -Recommendation 'Complete and retain evidence for all outstanding CE+ manual verification procedures.' `
+            -VerificationSteps @('Perform each listed manual test using the NCSC CE+ procedure.', 'Record assessor, timestamp, scope, and outcome.', 'Attach the retained evidence to the assessment record.') `
+            -Source 'NCSC Cyber Essentials Plus v3.2 manual test specification' -Confidence 'High'))
+    }
+
+    @($findings | Sort-Object Id -Unique)
+}
+
+function ConvertTo-AssessmentActions {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][array]$AssessmentFindings)
+
+    @($AssessmentFindings | Where-Object { $_.Recommendation } | ForEach-Object {
+        $phase = switch ($_.Severity) { 'Critical' { '30-day' }; 'High' { '60-day' }; default { '90-day' } }
+        [PSCustomObject]@{
+            FindingIds = @($_.Id)
+            Priority   = $_.Severity
+            Phase      = $phase
+            Action     = $_.Recommendation
+            Category   = $_.Category
+            Effort     = if ($_.Severity -eq 'Critical') { 'Medium' } else { 'Low' }
+            Impact     = $_.Title
+            Scope      = @($_.ScopeIds) -join ', '
+            NCResources = if ($_.Evidence.NonCompliantResources) { [int]$_.Evidence.NonCompliantResources } else { 0 }
+        }
+    } | Sort-Object @{ Expression = { switch ($_.Priority) { 'Critical' { 0 }; 'High' { 1 }; 'Medium' { 2 }; 'Low' { 3 }; default { 4 } } } }, @{ Expression = { @($_.FindingIds)[0] } })
+}
+
+function Resolve-ALZPolicyMatchState {
+    param([AllowEmptyCollection()][array]$MatchingAssignments = @())
+
+    if (@($MatchingAssignments | Where-Object { $_.'Enforcement Mode' -eq 'Default' }).Count -gt 0) { return 'Enforced' }
+    if (@($MatchingAssignments | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' }).Count -gt 0) { return 'DoNotEnforce' }
+    'Missing'
+}
+
+function Resolve-ALZAssetState {
+    param(
+        [ValidateSet('Enforced', 'DoNotEnforce', 'Missing')][string]$MatchState,
+        [Nullable[bool]]$Applicable = $null,
+        [bool]$ApplicabilityAssessed = $false
+    )
+
+    if ($MatchState -ne 'Missing') { return 'Detected' }
+    if (-not $ApplicabilityAssessed) { return 'Applicability not assessed' }
+    if ($null -eq $Applicable) { return 'Not detected' }
+    if ($Applicable) { return 'Applicable gap' }
+    'Not applicable'
+}
+
+function Find-ALZMatchingAssignments {
+    param(
+        [Parameter(Mandatory)][string]$AssetName,
+        [string]$OfficialDefinitionId = '',
+        $AssetParameters = $null,
+        [string]$Archetype = '',
+        [int]$SharedDefinitionIdCount = 1,
+        [System.Collections.Generic.HashSet[string]]$ConsumedAssignmentKeys = $null,
+        [AllowEmptyCollection()][array]$Assignments = @()
+    )
+
+    $normalizedDefinitionId = $OfficialDefinitionId.ToLowerInvariant()
+    @($Assignments | Where-Object {
+        $assignmentKey = if ($_.'Assignment ID') { [string]$_.'Assignment ID' } else { "$($_.'Assignment Name')|$($_.Scope)" }
+        if ($ConsumedAssignmentKeys -and $ConsumedAssignmentKeys.Contains($assignmentKey)) { return $false }
+
+        $nameMatches = [string]::Equals([string]$_.'Assignment Name', $AssetName, [System.StringComparison]::OrdinalIgnoreCase)
+        if ($nameMatches) { return $true }
+
+        $definitionMatches = $normalizedDefinitionId -and "$($_.'Policy Definition ID')".ToLowerInvariant() -eq $normalizedDefinitionId
+        if (-not $definitionMatches) { return $false }
+
+        $parametersMatch = Test-ALZParameterCompatibility -ExpectedParameters $AssetParameters -AssignmentParameters $_.Parameters
+        $assignmentArchetype = if ($_.'Archetype') { [string]$_.'Archetype' } elseif ($_.'Scope Name') { [string]$_.'Scope Name' } else { '' }
+        $archetypeMatches = -not $Archetype -or ($assignmentArchetype -and [string]::Equals($assignmentArchetype, $Archetype, [System.StringComparison]::OrdinalIgnoreCase))
+
+        $parametersMatch -and $archetypeMatches -and ($SharedDefinitionIdCount -le 1 -or $AssetParameters -or $Archetype)
+    })
 }
 
 # Function to generate policy recommendations — multi-signal point-based scoring
@@ -2161,10 +2673,7 @@ function Get-PolicyRecommendation {
                       else                    { 'None'   }
 
     # ═══════════════════════════════════════════════════════════════════════
-    #  COST IMPACT  — point-based (0–100 scale)
-    #  Signals: effect × category matrix (±40), name keywords (±10)
-    #  Key insight: a Modify that adds a tag ≠ a DINE that deploys
-    #  Log Analytics agents.  The category tells us WHAT gets deployed.
+    #  COST EXPOSURE — internal signals mapped to Low/Medium/High
     # ═══════════════════════════════════════════════════════════════════════
     $costPts = 20  # baseline = Low
 
@@ -2180,7 +2689,7 @@ function Get-PolicyRecommendation {
         }
         '^Modify$' {
             # Modify cost depends on what it modifies
-            if     ($Category -in @('Tags','General') -or $isLowCostName)                         { $costPts +=  0 }  # tag Modify ≈ free
+            if     ($Category -in @('Tags','General') -or $isLowCostName)                         { $costPts +=  0 }
             elseif ($Category -in @('Network','Compute','Storage'))                                { $costPts += 20 }  # infra property changes
             elseif ($Category -in @('Monitoring','Defender for Cloud','Security Center'))           { $costPts += 15 }  # config changes
             else                                                                                   { $costPts += 10 }  # generic Modify
@@ -2191,11 +2700,11 @@ function Get-PolicyRecommendation {
             break
         }
         '^Audit$|^AuditIfNotExists$' {
-            $costPts += 0   # Audit = no direct cost
+            $costPts += 0
             break
         }
         '^Disabled$' {
-            $costPts -= 10  # Disabled = zero cost
+            $costPts -= 10
             break
         }
         default {
@@ -2304,9 +2813,9 @@ function Get-PolicyRecommendation {
         $recommendation = "Preventive control active. Ensure exception process is documented."
     } elseif ($EffectType -eq 'DeployIfNotExists' -or $EffectType -eq 'Modify') {
         if ($costImpact -eq 'High') {
-            $recommendation = "Auto-remediation enabled with high cost impact. Monitor deployed resource costs closely and verify managed identity permissions."
+            $recommendation = "A remediating effect is configured with high heuristic cost exposure. Verify task state, deployed resources, official pricing, actual spend, and managed identity permissions."
         } else {
-            $recommendation = "Auto-remediation enabled. Verify managed identity permissions and monitor for drift."
+            $recommendation = "A remediating effect is configured. Verify task state, applicable resources, evaluation timing, and managed identity permissions."
         }
     } elseif ($EffectType -eq 'Disabled') {
         $recommendation = "Policy is disabled. Review whether it should be enabled or removed to reduce evaluation overhead."
@@ -2339,11 +2848,12 @@ function Get-PolicyRecommendation {
     }
 }
 
-# Generate comprehensive professional HTML report with 7 sections
+# Generate comprehensive professional HTML report with 7 core sections and optional ALZ and delta sections
 function Export-HTMLReport {
     param(
         [Parameter()][array]$PolicyResults = @(),
         [hashtable]$ComplianceData = @{},
+        $CEPAssessment = $null,
         [array]$CEPExportData = @(),
         [array]$CEPTestResults = @(),
         [array]$CEPPerScopeData = @(),
@@ -2358,20 +2868,86 @@ function Export-HTMLReport {
         [int]$InitiativeCount = 0,
         [int]$RegulatoryCount = 0,
         [string]$OutputPath,
+        $DataQuality = $null,
         [hashtable]$ALZData = $null,
+        [array]$AssessmentFindings = @(),
         [hashtable]$YAMLDeltaData = $null,
-        $AIInsights = $null
+        [array]$CostEvidenceRecords = @()
     )
+
+    function ConvertTo-CEPTestHtmlRow {
+        param([Parameter(Mandatory)]$TestResult)
+
+        $statusClass = switch ($TestResult.Status) { 'PASS' { 'status-pass' }; 'FAIL' { 'status-fail' }; 'WARN' { 'status-warn' }; 'SKIP' { 'status-skip' }; 'MANUAL' { 'status-manual' }; default { '' } }
+        $testId = [string]$TestResult.'Test #'
+        $details = [string]$TestResult.Details
+        $displayStatus = if ($TestResult.Status -eq 'PASS' -and $testId -match '^TC[1-5]$' -and $details -match '[1-9]\d* manual subtests') { 'AUTOMATED PASS' } else { [string]$TestResult.Status }
+        $evidenceType = if ($TestResult.PSObject.Properties['Evidence Type']) { [string]$TestResult.'Evidence Type' } else { '' }
+        $evidenceSource = if ($TestResult.PSObject.Properties['Source']) { [string]$TestResult.Source } else { '' }
+        $evidenceQuery = if ($TestResult.PSObject.Properties['Query']) { [string]$TestResult.Query } else { '' }
+        $hasResourceCounts = ([int]$TestResult.'Non-Compliant' + [int]$TestResult.Compliant + [int]$TestResult.'Total Resources') -gt 0
+        $useNotApplicableCounts = $false
+
+        if ($evidenceType -eq 'Automated') {
+            $details = "Automated check: $details"
+            $useNotApplicableCounts = -not $hasResourceCounts
+        } elseif ($testId -match '^TC[1-5]$') {
+            $details = "$(if ($hasResourceCounts) { 'Resource evaluation' } else { 'Configuration checks' }): $details"
+            $useNotApplicableCounts = -not $hasResourceCounts
+        } elseif ($TestResult.Status -eq 'MANUAL') {
+            $details = "Manual procedure: $details"
+            $useNotApplicableCounts = -not $hasResourceCounts
+        } elseif ($TestResult.'Control Group' -eq 'Prerequisites') {
+            $details = "Prerequisite check: $details"
+            $useNotApplicableCounts = -not $hasResourceCounts
+        }
+
+        if ($evidenceSource -or $evidenceQuery) {
+            $encodedSource = [System.Net.WebUtility]::HtmlEncode($evidenceSource)
+            $encodedQuery = [System.Net.WebUtility]::HtmlEncode($evidenceQuery.Trim())
+            $details += "<details class=`"evidence-details`"><summary>Source and query</summary><p><strong>Source:</strong> $encodedSource</p><pre>$encodedQuery</pre></details>"
+        }
+
+        $nonCompliantDisplay = if ($useNotApplicableCounts) { 'N/A' } else { $TestResult.'Non-Compliant' }
+        $compliantDisplay = if ($useNotApplicableCounts) { 'N/A' } else { $TestResult.Compliant }
+        $totalDisplay = if ($useNotApplicableCounts) { 'N/A' } else { $TestResult.'Total Resources' }
+        "<tr><td>$testId</td><td>$($TestResult.'Control Group')</td><td>$($TestResult.'Test Name')</td><td><span class=`"badge $statusClass`">$displayStatus</span></td><td>$details</td><td>$nonCompliantDisplay</td><td>$compliantDisplay</td><td>$totalDisplay</td></tr>"
+    }
 
     # ═══════════════════════════════════════════════════════════════
     #  DATA COMPUTATION
     # ═══════════════════════════════════════════════════════════════
 
     $reportDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $assessmentState = if ($DataQuality -and $DataQuality.AssessmentState) { $DataQuality.AssessmentState } else { 'DataUnavailable' }
+    $hasEvaluatedCompliance = $assessmentState -in @('EvaluatedCompliant', 'EvaluatedNonCompliant')
+    $assessmentStatusLabel = switch ($assessmentState) {
+        'EvaluatedCompliant' { 'Evaluated &middot; No non-compliant resources found' }
+        'EvaluatedNonCompliant' { 'Evaluated &middot; Non-compliant resources found' }
+        'NotEvaluated' { 'Not evaluated' }
+        default { 'Data unavailable' }
+    }
+    $dataQualityLabel = switch ($assessmentState) {
+        'EvaluatedCompliant' { 'Evaluated' }
+        'EvaluatedNonCompliant' { 'Evaluated' }
+        'NotEvaluated' { 'Not evaluated' }
+        default { 'Unavailable' }
+    }
+    $successfulQueryCount = if ($DataQuality) { @($DataQuality.SuccessfulQueries).Count } else { 0 }
+    $failedQueryCount = if ($DataQuality) { @($DataQuality.FailedQueries).Count } else { 1 }
+    $dataQualityRecords = if ($DataQuality) { $DataQuality.TotalRecords } else { 0 }
+    $dataQualityTimestamp = if ($DataQuality) { $DataQuality.Timestamp } else { 'unknown' }
+    $dataQualityFallback = if ($DataQuality -and $DataQuality.FallbackUsed) { 'yes' } else { 'no' }
     $totalAssignments = $PolicyResults.Count
-    $totalSections = 8
-    if ($YAMLDeltaData) { $totalSections++ }
-    if ($AIInsights) { $totalSections++ }
+    if ($AssessmentFindings.Count -eq 0) {
+        $AssessmentFindings = @(New-AssessmentFindings -PolicyResults $PolicyResults -ALZData $ALZData)
+    }
+    $hasALZSection = $null -ne $ALZData
+    $hasDeltaSection = $null -ne $YAMLDeltaData
+    $totalSections = 7 + [int]$hasALZSection + [int]$hasDeltaSection
+    $costSectionNumber = 6 + [int]$hasALZSection
+    $recommendationsSectionNumber = $costSectionNumber + 1
+    $deltaSectionNumber = $recommendationsSectionNumber + 1
     $totalNC = if ($NCExportData.Count -gt 0) { ($NCExportData | Select-Object -Property 'Resource ID' -Unique).Count } else { 0 }
     $totalNCEntries = $NCExportData.Count
     $enforcedCount = ($PolicyResults | Where-Object { $_.'Enforcement Mode' -eq 'Default' }).Count
@@ -2383,15 +2959,16 @@ function Export-HTMLReport {
     $assignmentsWithNC = ($PolicyResults | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) }).Count
 
     # Effect type counts
-    $denyCount = @($PolicyResults | Where-Object { $_.'Effect Type' -eq 'Deny' }).Count
-    $auditEffectCount = @($PolicyResults | Where-Object { $_.'Effect Type' -in @('Audit','AuditIfNotExists') }).Count
-    $dineModifyCount = @($PolicyResults | Where-Object { $_.'Effect Type' -in @('DeployIfNotExists','Modify') }).Count
-    $disabledCount = @($PolicyResults | Where-Object { $_.'Effect Type' -eq 'Disabled' }).Count
+    $canonicalEffectCounts = Get-EffectivePolicyEffectCounts -PolicyResults $PolicyResults
+    $denyCount = $canonicalEffectCounts.Deny
+    $auditEffectCount = $canonicalEffectCounts.Audit
+    $dineModifyCount = $canonicalEffectCounts.Remediating
+    $disabledCount = $canonicalEffectCounts.Disabled
 
     # Cost & operational impact
-    $costHigh = @($PolicyResults | Where-Object { $_.'Cost Impact' -eq 'High' }).Count
-    $costMedium = @($PolicyResults | Where-Object { $_.'Cost Impact' -eq 'Medium' }).Count
-    $costLow = @($PolicyResults | Where-Object { $_.'Cost Impact' -eq 'Low' }).Count
+    $costHigh = @($AssessmentFindings | Where-Object Category -eq 'Cost Exposure').Count
+    $costMedium = @($PolicyResults | Where-Object { $_.'Cost Exposure' -eq 'Medium' }).Count
+    $costLow = @($PolicyResults | Where-Object { $_.'Cost Exposure' -eq 'Low' }).Count
     $opsHigh = @($PolicyResults | Where-Object { $_.'Operational Overhead' -eq 'High' }).Count
     $opsMedium = @($PolicyResults | Where-Object { $_.'Operational Overhead' -eq 'Medium' }).Count
     $opsLow = @($PolicyResults | Where-Object { $_.'Operational Overhead' -eq 'Low' }).Count
@@ -2411,27 +2988,8 @@ function Export-HTMLReport {
         "<tr><td>$($_.Name)</td><td>$($_.Count)</td><td>$ncInScope</td><td class=`"$(if ($ncResInScope -gt 0) { 'nc-bad' } else { 'nc-ok' })`">$ncResInScope</td></tr>"
     }) -join "`n"
 
-    # Effect distribution (normalised — compound initiative effects → dominant effect)
-    $effectNormMap = @{
-        'audit' = 'Audit'; 'auditifnotexists' = 'AuditIfNotExists'; 'deny' = 'Deny';
-        'denyaction' = 'DenyAction'; 'deployifnotexists' = 'DeployIfNotExists'; 'modify' = 'Modify';
-        'disabled' = 'Disabled'; 'manual' = 'Manual'; 'append' = 'Append';
-        'parameterised' = 'Parameterised'
-    }
-    $normalizedEffects = $PolicyResults | ForEach-Object {
-        $raw = $_.'Effect Type'
-        if ([string]::IsNullOrWhiteSpace($raw)) { '(not specified)' }
-        elseif ($effectNormMap.ContainsKey($raw.ToLower())) { $effectNormMap[$raw.ToLower()] }
-        elseif ($raw -match ',') {
-            # Compound initiative string like "Parameterised(268), AuditIfNotExists(1)"
-            # Extract the dominant (highest-count) effect
-            $parts = $raw -split ',\s*'
-            $dominant = $parts | Sort-Object { if ($_ -match '\((\d+)\)') { [int]$Matches[1] } else { 1 } } -Descending | Select-Object -First 1
-            $cleanName = ($dominant -replace '\(\d+\)', '').Trim()
-            if ($effectNormMap.ContainsKey($cleanName.ToLower())) { $effectNormMap[$cleanName.ToLower()] } else { $cleanName }
-        } else { $raw }
-    }
-    $effectBreakdown = $normalizedEffects | Group-Object | Sort-Object Count -Descending
+    # Effect distribution uses every effective category once per assignment.
+    $effectBreakdown = @($canonicalEffectCounts.Breakdown | Sort-Object Count -Descending)
     # Tooltip descriptions for each effect type
     $effectDescriptions = @{
         'Audit' = 'Flags non-compliant resources but does not block them'
@@ -2443,11 +3001,11 @@ function Export-HTMLReport {
         'Disabled' = 'Policy exists but is not evaluated'
         'Manual' = 'Requires manual attestation of compliance'
         'Append' = 'Adds fields to resources during creation/update'
-        'Parameterised' = 'Effect is set via parameter at assignment time (usually defaults to Audit)'
+        'Parameterised' = 'Effect is set via an assignment parameter whose effective value could not be resolved'
         '(not specified)' = 'Effect type could not be determined'
     }
     $effectBreakdownRows = ($effectBreakdown | ForEach-Object {
-        $effectName = $_.Name
+        $effectName = $_.Effect
         $tip = if ($effectDescriptions.ContainsKey($effectName)) { $effectDescriptions[$effectName] } else { '' }
         $nameHtml = if ($tip) { "$effectName <span class=`"col-info`" data-tip=`"$tip`" title=`"$tip`">i</span>" } else { $effectName }
         $pctClass = if ($effectName -eq 'Disabled') { 'warn-text' } else { '' }
@@ -2467,17 +3025,127 @@ function Export-HTMLReport {
         "<tr><td>$($_.'Display Name')</td><td><span class=`"badge $typeClass`">$($_.'Policy Type')</span></td><td class=`"nc-bad`">$(if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 })</td><td>$($_.'Scope Name')</td><td>$($_.'Enforcement Mode')</td></tr>"
     }) -join "`n"
 
+    if (-not $CEPAssessment) {
+        $CEPAssessment = New-CEPAssessment -Requested $false -State NotRequested
+    }
+
     # ── CE+ Score ──
-    $ceScore = 0; $tPass = 0; $tFail = 0; $tWarn = 0; $tSkip = 0; $tManual = 0
+    $ceScore = $CEPAssessment.Score; $tPass = 0; $tFail = 0; $tWarn = 0; $tSkip = 0; $tManual = 0
     if ($CEPTestResults.Count -gt 0) {
-        $tPass = @($CEPTestResults | Where-Object { $_.'Status' -eq 'PASS' }).Count
-        $tFail = @($CEPTestResults | Where-Object { $_.'Status' -eq 'FAIL' }).Count
-        $tWarn = @($CEPTestResults | Where-Object { $_.'Status' -eq 'WARN' }).Count
+        $technicalVerdicts = @($CEPTestResults | Where-Object { $_.'Test #' -match '^TC[1-5]$' })
+        $tPass = @($technicalVerdicts | Where-Object { $_.'Status' -eq 'PASS' }).Count
+        $tFail = @($technicalVerdicts | Where-Object { $_.'Status' -eq 'FAIL' }).Count
+        $tWarn = @($technicalVerdicts | Where-Object { $_.'Status' -eq 'WARN' }).Count
         $tSkip = @($CEPTestResults | Where-Object { $_.'Status' -eq 'SKIP' }).Count
         $tManual = @($CEPTestResults | Where-Object { $_.'Status' -eq 'MANUAL' }).Count
-        $tAutomated = $tPass + $tFail
-        $ceScore = if ($tAutomated -gt 0) { [math]::Round(($tPass / $tAutomated) * 100) } else { 0 }
     }
+    $tAutomated = $tPass + $tFail
+
+    $cepDataQualityState = if ($CEPAssessment.DataQuality -and $CEPAssessment.DataQuality.State) { [string]$CEPAssessment.DataQuality.State } else { 'Unknown' }
+    $cepConfidence = switch ($CEPAssessment.State) {
+        'Evaluated' { if ($cepDataQualityState -eq 'Complete') { 'High' } else { 'Medium' } }
+        'PartiallyEvaluated' { 'Medium' }
+        default { 'Low' }
+    }
+    $cepConfidenceClass = switch ($cepConfidence) { 'High' { 'status-pass' }; 'Medium' { 'status-warn' }; default { 'status-skip' } }
+    $cepStateClass = switch ($CEPAssessment.State) { 'Evaluated' { 'status-pass' }; 'EvaluationFailed' { 'status-fail' }; 'PartiallyEvaluated' { 'status-warn' }; default { 'status-ne' } }
+    $cepMappingClass = switch ($CEPAssessment.MappingState) { 'Available' { 'status-pass' }; 'Failed' { 'status-fail' }; 'Pending' { 'status-warn' }; default { 'status-ne' } }
+    $cepScoreClass = if ($CEPAssessment.ScoreState -eq 'Measured') { 'status-pass' } else { 'status-ne' }
+    $cepDataQualityClass = switch ($cepDataQualityState) { 'Complete' { 'status-pass' }; 'Failed' { 'status-fail' }; 'Partial' { 'status-warn' }; default { 'status-ne' } }
+
+    $cepPresentation = switch ($CEPAssessment.State) {
+        'NotRequested' {
+            @{
+                Heading = 'CE+ assessment not requested'
+                Fact = 'CEP assessment was not requested for this run.'
+                Interpretation = 'No CE or CE+ conclusion is available.'
+                Verify = 'Review the command parameters if CEP evidence is required.'
+                Action = 'Run with -CEP Full to request policy mapping and technical tests.'
+            }
+        }
+        'PrerequisiteUnavailable' {
+            @{
+                Heading = if ($CEPAssessment.TestState -eq 'PartiallyEvaluated') { 'Assessment partially evaluated' } else { 'Mapping unavailable' }
+                Fact = if ($CEPAssessment.PrerequisiteReason) { $CEPAssessment.PrerequisiteReason } else { 'The CE initiative prerequisite was unavailable.' }
+                Interpretation = 'Policy-based CE mapping is unavailable; independent CE+ technical checks may still provide partial evidence.'
+                Verify = 'Check current built-in policy set definitions, provider availability, and the configured mapping source.'
+                Action = 'Select a supported mapping source or configure an explicit definition ID; review the technical results separately.'
+            }
+        }
+        'PartiallyEvaluated' {
+            @{
+                Heading = 'Assessment partially evaluated'
+                Fact = 'Only part of the requested CEP evidence was evaluated.'
+                Interpretation = 'Available results are usable only within their stated scope; no complete CE+ conclusion is supported.'
+                Verify = 'Review skipped, warning, and manual checks together with data-quality limitations.'
+                Action = 'Resolve unavailable queries and complete manual verification before reassessment.'
+            }
+        }
+        'EvaluationFailed' {
+            @{
+                Heading = 'Evaluation failed'
+                Fact = 'A CEP query or runtime operation failed.'
+                Interpretation = 'The assessment did not complete and no positive or negative compliance conclusion is supported.'
+                Verify = 'Review failed-query evidence and runtime diagnostics in the assessment data quality details.'
+                Action = 'Correct the query or runtime failure and rerun the CEP assessment.'
+            }
+        }
+        default {
+            @{
+                Heading = 'Assessment evaluated'
+                Fact = "$tAutomated automated technical verdict(s) were evaluated."
+                Interpretation = 'The displayed score is a tool indicator based only on technical PASS and FAIL verdicts.'
+                Verify = 'Review policy mapping evidence, technical test details, and any remaining manual checks.'
+                Action = 'Address failed controls and retain the evidence for independent assessment.'
+            }
+        }
+    }
+
+    $safeCEPHeading = [System.Web.HttpUtility]::HtmlEncode($cepPresentation.Heading)
+    $safeCEPFact = [System.Web.HttpUtility]::HtmlEncode($cepPresentation.Fact)
+    $safeCEPInterpretation = [System.Web.HttpUtility]::HtmlEncode($cepPresentation.Interpretation)
+    $safeCEPVerify = [System.Web.HttpUtility]::HtmlEncode($cepPresentation.Verify)
+    $safeCEPAction = [System.Web.HttpUtility]::HtmlEncode($cepPresentation.Action)
+    $cepMappingSourceState = if ($CEPAssessment.MappingSourceState) { [string]$CEPAssessment.MappingSourceState } else { 'NotRequested' }
+    $safeCEPDefinitionDisplayName = [System.Web.HttpUtility]::HtmlEncode($CEPAssessment.DefinitionDisplayName)
+    $safeCEPDefinitionId = [System.Web.HttpUtility]::HtmlEncode($CEPAssessment.DefinitionId)
+    $safeCEPSelectionMethod = [System.Web.HttpUtility]::HtmlEncode($CEPAssessment.SelectionMethod)
+    $cepCandidateDefinitions = @($CEPAssessment.CandidateDefinitions)
+    $cepCandidatesHtml = if ($cepCandidateDefinitions.Count -gt 0) {
+        $candidateItems = $cepCandidateDefinitions | ForEach-Object {
+            $candidateName = [System.Web.HttpUtility]::HtmlEncode($_.DisplayName)
+            $candidateId = [System.Web.HttpUtility]::HtmlEncode($(if ($_.Id) { $_.Id } else { $_.Name }))
+            $candidateVersion = [System.Web.HttpUtility]::HtmlEncode($_.Version)
+            "<li><strong>$candidateName</strong><br><span class='text-dim'>ID: $candidateId$(if ($candidateVersion) { " &middot; Definition version: $candidateVersion" })</span></li>"
+        }
+        "<details><summary>Candidate CE policy set definitions ($($cepCandidateDefinitions.Count))</summary><ul>$($candidateItems -join '')</ul></details>"
+    } else { '' }
+    $cepSelectedSourceHtml = if ($safeCEPDefinitionDisplayName -or $safeCEPDefinitionId) {
+        $cepSourceLabel = if ($cepMappingSourceState -eq 'Available') { 'Mapping source' } else { 'Requested mapping source' }
+        "<p><strong>${cepSourceLabel}:</strong> $safeCEPDefinitionDisplayName$(if ($safeCEPDefinitionId) { "<br><span class='text-dim'>ID: $safeCEPDefinitionId</span>" })$(if ($safeCEPSelectionMethod) { "<br><span class='text-dim'>Selected by: $safeCEPSelectionMethod</span>" })</p>"
+    } else { '' }
+    $cepEvidenceHtml = @"
+    <div class="callout callout-info" id="cep-assessment-evidence">
+        <span class="callout-icon">&#x2139;&#xFE0F;</span>
+        <div>
+            <strong>$safeCEPHeading</strong>
+            <p>
+                <span class="badge $cepStateClass">Assessment: $($CEPAssessment.State)</span>
+                <span class="badge $cepMappingClass">Mapping: $($CEPAssessment.MappingState)</span>
+                <span class="badge $cepMappingClass">Source: $cepMappingSourceState</span>
+                <span class="badge $cepScoreClass">Score: $($CEPAssessment.ScoreState)</span>
+                <span class="badge $cepConfidenceClass">Confidence: $cepConfidence</span>
+                <span class="badge $cepDataQualityClass">Data quality: $cepDataQualityState</span>
+            </p>
+            <p><strong>Fact:</strong> $safeCEPFact</p>
+            <p><strong>Interpretation:</strong> $safeCEPInterpretation</p>
+            <p><strong>Verify:</strong> $safeCEPVerify</p>
+            <p><strong>Action:</strong> $safeCEPAction</p>
+            $cepSelectedSourceHtml
+            $cepCandidatesHtml
+        </div>
+    </div>
+"@
 
     # ── CE+ Multi-Assignment Detection ──
     # Detect if the Cyber Essentials initiative is assigned at multiple scopes
@@ -2500,7 +3168,7 @@ function Export-HTMLReport {
             $displayName = $asgn.'Display Name'
             $enfMode = $asgn.'Enforcement Mode'
             $enfClass = if ($enfMode -eq 'DoNotEnforce') { 'status-warn' } else { 'status-pass' }
-            $enfLabel = if ($enfMode -eq 'DoNotEnforce') { 'Audit Only' } else { 'Enforced' }
+            $enfLabel = if ($enfMode -eq 'DoNotEnforce') { 'Enforcement disabled' } else { 'Enforced' }
             $enfIcon  = if ($enfMode -eq 'DoNotEnforce') { '&#x26A0;&#xFE0F;' } else { '&#x2705;' }
 
             # Match per-scope compliance data by display name
@@ -2517,7 +3185,7 @@ function Export-HTMLReport {
                 $barColor = if ($pct -ge 90) { '#22c55e' } elseif ($pct -ge 50) { '#f0ad4e' } else { '#dc3545' }
                 $headerBadge = "<span style=`"margin-left:10px;font-weight:700;color:${barColor};`">${pct}%</span>"
                 $complianceSection = @"
-                <details style="margin-top:6px;" open>
+                <details style="margin-top:6px;">
                     <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;">&#x1F4CA; Overall Resource Compliance</summary>
                     <p style="font-size:0.78rem;color:var(--text-dim);margin:4px 0 8px 0;">Unique <strong>Azure resources</strong> evaluated against all policies in this initiative assignment. Each resource is counted once using strictest-state-wins deduplication.</p>
                     <div style="padding:10px 0 4px 0;">
@@ -2611,15 +3279,15 @@ function Export-HTMLReport {
             $testDetailSection = ''
             if ($CEPTestResults.Count -gt 0) {
                 $scopeTestRows = ($CEPTestResults | ForEach-Object {
-                    $statusClass = switch ($_.'Status') { 'PASS' { 'status-pass' }; 'FAIL' { 'status-fail' }; 'WARN' { 'status-warn' }; 'SKIP' { 'status-skip' }; 'MANUAL' { 'status-manual' }; default { '' } }
-                    "<tr><td>$($_.'Test #')</td><td>$($_.'Control Group')</td><td>$($_.'Test Name')</td><td><span class=`"badge $statusClass`">$($_.'Status')</span></td><td>$($_.'Details')</td><td>$($_.'Non-Compliant')</td><td>$($_.'Compliant')</td><td>$($_.'Total Resources')</td></tr>"
+                    ConvertTo-CEPTestHtmlRow -TestResult $_
                 }) -join "`n"
                 $testDetailSection = @"
                 <details style="margin-top:6px;">
                     <summary style="cursor:pointer;font-size:0.85rem;font-weight:600;">&#x1F9EA; CE+ Assessment Tests ($($CEPTestResults.Count) tests) <span style="font-size:0.75rem;color:var(--text-dim);font-weight:400;">shared across all scopes</span></summary>
                     <p style="font-size:0.78rem;color:var(--text-dim);margin:4px 0 0 0;padding:0 8px;">Automated <strong>assessment checks</strong> (prerequisites, per-group compliance, and CE+ v3.2 specification tests). These are tenant-wide evaluations shared across all assignments.</p>
                     <div style="padding:8px 0;">
-                        <div class="note-box" style="margin-bottom:8px;"><span class="note-icon">&#x1F4AC;</span><span><strong>Test Statuses:</strong> <span class="badge status-pass">PASS</span> = requirement met. <span class="badge status-fail">FAIL</span> = requirement not met, action needed. <span class="badge status-warn">WARN</span> = partial compliance, review recommended. <span class="badge status-skip">SKIP</span> = test could not run (data unavailable). <span class="badge status-manual">MANUAL</span> = requires human verification (cannot be automated).</span></div>
+                        <div class="note-box" style="margin-bottom:8px;"><span class="note-icon">&#x1F4AC;</span><span><strong>Test Statuses:</strong> <span class="badge status-pass">AUTOMATED PASS</span> = automated configuration checks passed, but listed manual verification may remain. <span class="badge status-fail">FAIL</span> = requirement not met, action needed. <span class="badge status-warn">WARN</span> = partial compliance, review recommended. <span class="badge status-skip">SKIP</span> = test could not run (data unavailable). <span class="badge status-manual">MANUAL</span> = requires human verification (cannot be automated).</span></div>
+                        <p style="font-size:0.78rem;color:var(--text-dim);margin:0 0 8px 0;">Resource count columns show <strong>N/A</strong> when a verdict is based on configuration, prerequisite, or manual evidence rather than evaluated Azure resources.</p>
                         <div class="summary-cards" style="margin-bottom:10px;">
                             <div class="card card-green"><div class="card-num">$tPass</div><div class="card-label">Passed</div></div>
                             <div class="card card-red"><div class="card-num">$tFail</div><div class="card-label">Failed</div></div>
@@ -2657,7 +3325,7 @@ function Export-HTMLReport {
 
             # Outer card per scope
             @"
-        <details style="margin-top:8px;border:1px solid var(--table-border);border-radius:6px;padding:2px 12px;" open>
+        <details style="margin-top:8px;border:1px solid var(--table-border);border-radius:6px;padding:2px 12px;">
             <summary style="cursor:pointer;font-size:0.9rem;font-weight:600;padding:6px 0;">
                 ${scopeName} <span style="font-size:0.8rem;color:var(--text-dim);font-weight:400;">(${scopeType})</span>
                 <span class="badge ${enfClass}" style="margin-left:8px;font-size:0.75rem;">${enfIcon} ${enfLabel}</span>
@@ -2677,7 +3345,7 @@ function Export-HTMLReport {
         $ceMultiAssignmentBanner = @"
     <div class="note-box" style="border-left:4px solid #f0ad4e;"><span class="note-icon">&#x26A0;&#xFE0F;</span><span>
         <strong>Multi-Assignment Detected: $($ceInitiativeAssignments.Count) Cyber Essentials initiative assignments</strong>
-        <span style="margin-left:12px;font-size:0.85rem;">($ceEnforcedCount enforced, $ceAuditOnlyCount audit-only)</span>
+        <span style="margin-left:12px;font-size:0.85rem;">($ceEnforcedCount enforced, $ceAuditOnlyCount enforcement disabled)</span>
         <br><span style="font-size:0.85rem;color:var(--text-dim);">Compliance data is <strong>deduplicated</strong> using strictest-state-wins per resource &mdash; if any assignment reports a resource as non-compliant, it is treated as non-compliant regardless of other assignments. This prevents double-counting when scopes overlap.</span>
         $perScopeCards
     </span></div>
@@ -2766,7 +3434,7 @@ function Export-HTMLReport {
 
     <div class="note-box"><span class="note-icon">&#x2139;&#xFE0F;</span><span><strong>Scope Distribution:</strong> MG: $exMgCount &nbsp;|&nbsp; Subscription: $exSubCount &nbsp;|&nbsp; Resource Group: $exRgCount &nbsp;|&nbsp; Resource: $exResCount$(if ($exPartialCount -gt 0) { " &nbsp;|&nbsp; <strong>$exPartialCount partial exemptions</strong> (only specific policies within an initiative are exempted)" })</span></div>
 
-    <details open>
+    <details class="report-disclosure depth-3">
         <summary>&#x1F4CB; All Exemptions ($($ExemptionData.Count))</summary>
         <div class="details-content">
             <div class="filter-bar">
@@ -2808,9 +3476,14 @@ $(if ($exExpiredCount -gt 0) {
         $alzMatched = $ALZData.TotalMatched
         $alzMissing = $ALZData.TotalMissing
         $alzDoNotEnforce = $ALZData.TotalDoNotEnforce
+        $alzNotDetected = $ALZData.TotalNotDetected
+        $alzApplicabilityNotAssessed = $ALZData.TotalApplicabilityNotAssessed
+        $alzNotApplicable = $ALZData.TotalNotApplicable
         $alzCoveragePct = $ALZData.CoveragePercent
         $alzEnforcedPct = $ALZData.EnforcedCoveragePercent
         $alzDeployed = $alzMatched + $alzDoNotEnforce
+        $alzSourceVersion = [System.Net.WebUtility]::HtmlEncode([string]$ALZData.SourceVersion)
+        $alzSourceRetrievedAt = [System.Net.WebUtility]::HtmlEncode([string]$ALZData.SourceRetrievedAt)
 
         # Coverage rating
         $alzRating = if ($alzCoveragePct -ge 90 -and $alzDoNotEnforce -eq 0) { 'Excellent' }
@@ -2829,11 +3502,12 @@ $(if ($exExpiredCount -gt 0) {
             if ($catPolicies.Count -eq 0) { continue }
             $catMatched = @($ALZData.MatchedPolicies | Where-Object { $_.Category -eq $category }).Count
             $catDNE = @($ALZData.DoNotEnforcePolicies | Where-Object { $_.Category -eq $category }).Count
-            $catMissing = @($ALZData.MissingPolicies | Where-Object { $_.Category -eq $category }).Count
+            $catMissing = @($ALZData.AssetAssessments | Where-Object { $_.Category -eq $category -and $_.State -eq 'Applicable gap' }).Count
+            $catUnassessed = @($ALZData.AssetAssessments | Where-Object { $_.Category -eq $category -and $_.State -eq 'Applicability not assessed' }).Count
             $catTotal = $catPolicies.Count
             $catPct = if ($catTotal -gt 0) { [math]::Round((($catMatched + $catDNE) / $catTotal) * 100) } else { 0 }
             $catPctClass = if ($catPct -ge 75) { 'nc-ok' } elseif ($catPct -ge 50) { 'warn-text' } else { 'nc-bad' }
-            $alzCategoryRows += "<tr><td><strong>$category</strong></td><td>$catTotal</td><td class='nc-ok'>$catMatched</td><td class='warn-text'>$catDNE</td><td class='nc-bad'>$catMissing</td><td class='$catPctClass'>$catPct%</td></tr>`n"
+            $alzCategoryRows += "<tr><td><strong>$category</strong></td><td>$catTotal</td><td class='nc-ok'>$catMatched</td><td class='warn-text'>$catDNE</td><td class='nc-bad'>$catMissing</td><td>$catUnassessed</td><td class='$catPctClass'>$catPct%</td></tr>`n"
         }
 
         # Build missing policies detail rows
@@ -2860,43 +3534,50 @@ $(if ($exExpiredCount -gt 0) {
         }
 
         $alzSectionHtml = @"
-<hr class="section-sep" data-label="Landing Zone">
-
 <!-- ══════════════════════════════════════════════════════ -->
 <!--  6. AZURE LANDING ZONE ANALYSIS                       -->
 <!-- ══════════════════════════════════════════════════════ -->
-<section id="sec-alz">
-    <div class="section-header">
-        <h2>&#x1F3D7;&#xFE0F; Azure Landing Zone Analysis</h2>
+<section id="sec-alz" class="report-page" data-report-page data-page-group="page-csa">
+<details class="section-disclosure">
+    <summary>
+        <span>Azure Landing Zone Analysis</span>
         <span class="section-num">Section 6 of $totalSections</span>
-    </div>
+        <span class="disclosure-hint">$alzCoveragePct% detected · $alzEnforcedPct% enforced · $alzMissing applicable gaps</span>
+    </summary>
+    <div class="section-content">
 
     <div class="section-intro">
-        <p><strong>Purpose:</strong> Assess your policy estate against the <a href="https://aka.ms/alz" target="_blank" style="color:var(--accent);">Azure Landing Zones (ALZ) Library</a> &mdash; Microsoft's recommended policy baseline for enterprise-scale deployments. This section identifies which ALZ-recommended policies are deployed, which are in audit-only mode, and which are missing entirely.</p>
-        <p>A high coverage percentage indicates your environment follows cloud adoption best practices. <strong style="color:var(--red)">Missing</strong> policies represent governance gaps. <strong style="color:var(--amber)">DoNotEnforce</strong> policies are deployed but not actively blocking violations.</p>
+        <p><strong>Purpose:</strong> Compare your policy estate with the <a href="https://aka.ms/alz" target="_blank" style="color:var(--accent);">Azure Landing Zones (ALZ) Library</a>. Detection and applicability are reported separately; an asset is a governance gap only when applicability was assessed and the applicable asset was not detected.</p>
+        <p><strong>Source release:</strong> $alzSourceVersion &nbsp;|&nbsp; <strong>Retrieved:</strong> $alzSourceRetrievedAt</p>
     </div>
 
     <div class="legend">
         <h4>&#x1F3F7;&#xFE0F; ALZ Coverage Legend</h4>
         <div class="legend-grid">
             <div class="legend-item"><span class="badge status-pass">Deployed</span> ALZ policy matched and actively enforced (Default mode)</div>
-            <div class="legend-item"><span class="badge status-warn">DoNotEnforce</span> ALZ policy deployed but in audit-only mode &mdash; not blocking violations</div>
-            <div class="legend-item"><span class="badge status-fail">Missing</span> ALZ-recommended policy not found in any assignment</div>
+            <div class="legend-item"><span class="badge status-warn">DoNotEnforce</span> ALZ policy deployed with enforcement disabled &mdash; configured effects are not applied</div>
+            <div class="legend-item"><span class="badge status-pass">Detected</span> Composite asset match found; enforcement is reported separately</div>
+            <div class="legend-item"><span class="badge status-dim">Not detected</span> No composite assignment match found before applicability classification</div>
+            <div class="legend-item"><span class="badge status-fail">Applicable gap</span> Applicability assessed as true, but no assignment matched</div>
+            <div class="legend-item"><span class="badge status-dim">Applicability not assessed</span> No match and insufficient evidence to claim a governance gap</div>
+            <div class="legend-item"><span class="badge status-dim">Not applicable</span> Applicability assessed as false</div>
             <div class="legend-item"><span class="badge status-fail">Preventive</span> = Deny/Block, <span class="badge status-warn">Remediation</span> = DINE/Modify, <span class="badge status-nc">Detective</span> = Audit/Monitor</div>
         </div>
     </div>
 
     <div class="summary-cards">
-        <div class="card $alzRatingClass" title="Overall ALZ coverage rating based on percentage of recommended policies deployed"><div class="card-num">$alzRatingIcon $alzRating</div><div class="card-label">Coverage Rating <span class="col-info" data-tip="Overall rating: Excellent (≥90% + all enforced), Good (≥75%), Moderate (≥50%), Weak (<50%)" title="ALZ coverage rating">&#9432;</span></div></div>
+        <div class="card $alzRatingClass" title="Tool heuristic based only on ALZ inventory coverage; not an official Microsoft maturity rating"><div class="card-num">$alzRatingIcon $alzRating</div><div class="card-label">Tool Coverage Indicator <span class="col-info" data-tip="Opinionated tool heuristic: Excellent (≥90% + all enforced), Good (≥75%), Moderate (≥50%), Weak (<50%). Not an official ALZ maturity threshold." title="Tool coverage heuristic">&#9432;</span></div></div>
         <div class="card card-blue" title="Total number of policies recommended by ALZ Library"><div class="card-num">$alzTotal</div><div class="card-label">ALZ Recommended <span class="col-info" data-tip="Total policies from the official Azure Landing Zones Library across all categories" title="Total recommended">&#9432;</span></div></div>
         <div class="card card-green" title="ALZ policies found and actively enforced in your tenant"><div class="card-num">$alzMatched</div><div class="card-label">Deployed &amp; Enforced <span class="col-info" data-tip="ALZ policies matched to your assignments with Default enforcement mode" title="Deployed and enforced">&#9432;</span></div></div>
-        <div class="card card-amber" title="ALZ policies deployed but in DoNotEnforce (audit-only) mode"><div class="card-num">$alzDoNotEnforce</div><div class="card-label">Audit Only <span class="col-info" data-tip="ALZ policies found but in DoNotEnforce mode — they report but do not prevent violations" title="Audit only">&#9432;</span></div></div>
-        <div class="card card-red" title="ALZ-recommended policies not found in your tenant"><div class="card-num">$alzMissing</div><div class="card-label">Missing <span class="col-info" data-tip="ALZ-recommended policies not matched to any of your assignments" title="Missing policies">&#9432;</span></div></div>
+        <div class="card card-amber" title="ALZ policies deployed with DoNotEnforce mode"><div class="card-num">$alzDoNotEnforce</div><div class="card-label">Non-Enforcing <span class="col-info" data-tip="ALZ assignments found in DoNotEnforce mode. Azure evaluates them, but their configured effects are not applied." title="DoNotEnforce assignments">&#9432;</span></div></div>
+        <div class="card card-red" title="Applicable ALZ assets not detected"><div class="card-num">$alzMissing</div><div class="card-label">Applicable Gaps</div></div>
+        <div class="card card-gray" title="ALZ assets without a composite assignment match"><div class="card-num">$alzNotDetected</div><div class="card-label">Not Detected</div></div>
+        <div class="card card-gray" title="Assets without enough evidence to assess applicability"><div class="card-num">$alzApplicabilityNotAssessed</div><div class="card-label">Applicability Not Assessed</div></div>
     </div>
 
     <div class="grid-3" style="margin-bottom:20px;">
         <div class="insight-box">
-            <h4>&#x1F4CA; Overall Coverage <span class="col-info" data-tip="Percentage of ALZ policies deployed (enforced + audit-only) out of total recommended" title="Overall coverage">&#9432;</span></h4>
+            <h4>&#x1F4CA; Overall Coverage <span class="col-info" data-tip="Percentage of ALZ policies deployed (Default + DoNotEnforce) out of total recommended" title="Overall coverage">&#9432;</span></h4>
             <div class="big-num" style="color:$alzCoverageColor">$alzCoveragePct%</div>
             <p>$alzDeployed of $alzTotal ALZ policies deployed</p>
         </div>
@@ -2906,16 +3587,16 @@ $(if ($exExpiredCount -gt 0) {
             <p>$alzMatched of $alzTotal ALZ policies actively enforced</p>
         </div>
         <div class="insight-box">
-            <h4>&#x26A0;&#xFE0F; Governance Gaps <span class="col-info" data-tip="ALZ policies missing or not enforced — these represent gaps in your governance baseline" title="Governance gaps">&#9432;</span></h4>
+            <h4>&#x26A0;&#xFE0F; Governance Gaps <span class="col-info" data-tip="Applicable assets not detected plus detected assignments with enforcement disabled" title="Governance gaps">&#9432;</span></h4>
             <div class="big-num" style="color:$(if (($alzMissing + $alzDoNotEnforce) -gt 0) { 'var(--red)' } else { 'var(--green)' })">$($alzMissing + $alzDoNotEnforce)</div>
-            <p>$alzMissing missing + $alzDoNotEnforce audit-only</p>
+            <p>$alzMissing applicable gaps + $alzDoNotEnforce enforcement disabled; $alzNotApplicable not applicable</p>
         </div>
     </div>
 
     <h3 class="sub-title">Coverage by Category</h3>
     <div class="table-wrap">
     <table id="alz-category-table">
-    <thead><tr><th class="sortable" onclick="sortTable('alz-category-table',0)">Category <span class="col-info" data-tip="ALZ policy category (Security & Network, Monitoring, Defender, etc.)" title="Category">&#9432;</span></th><th class="sortable" onclick="sortTable('alz-category-table',1)">Recommended <span class="col-info" data-tip="Total ALZ policies recommended in this category" title="Total recommended">&#9432;</span></th><th class="sortable" onclick="sortTable('alz-category-table',2)">Deployed <span class="col-info" data-tip="Policies found and actively enforced" title="Deployed">&#9432;</span></th><th class="sortable" onclick="sortTable('alz-category-table',3)">Audit Only <span class="col-info" data-tip="Policies deployed but in DoNotEnforce mode" title="Audit only">&#9432;</span></th><th class="sortable" onclick="sortTable('alz-category-table',4)">Missing <span class="col-info" data-tip="Policies not found in your tenant" title="Missing">&#9432;</span></th><th class="sortable" onclick="sortTable('alz-category-table',5)">Coverage <span class="col-info" data-tip="Percentage of recommended policies that are deployed (enforced + audit)" title="Coverage %">&#9432;</span></th></tr></thead>
+    <thead><tr><th>Category</th><th>Recommended</th><th>Deployed</th><th>Enforcement Disabled</th><th>Applicable Gaps</th><th>Applicability Not Assessed</th><th>Coverage</th></tr></thead>
     <tbody>$alzCategoryRows</tbody>
     </table>
     </div>
@@ -2944,10 +3625,10 @@ $(if ($alzMissingRows) {
 $(if ($alzDNERows) {
 @"
     <details style="margin-top:12px;">
-        <summary>&#x1F7E1; ALZ Policies in Audit-Only Mode ($alzDoNotEnforce)</summary>
+        <summary>&#x1F7E1; ALZ Policies with Enforcement Disabled ($alzDoNotEnforce)</summary>
         <div class="details-content">
             <div class="filter-bar">
-                <input type="text" id="filter-alz-dne" placeholder="Search audit-only policies..." oninput="filterTable('alz-dne-table','filter-alz-dne')">
+                <input type="text" id="filter-alz-dne" placeholder="Search DoNotEnforce policies..." oninput="filterTable('alz-dne-table','filter-alz-dne')">
                 <span class="count" id="count-alz-dne">$alzDoNotEnforce policies</span>
                 <button class="copy-btn" onclick="copyTable('alz-dne-table',this)" title="Copy table to clipboard">&#x1F4CB; Copy</button>
             </div>
@@ -2963,6 +3644,8 @@ $(if ($alzDNERows) {
 })
 
     <p style="margin-top:16px;font-size:0.75rem;color:var(--text-dim);">&#x1F4DA; <strong>Reference:</strong> <a href="https://aka.ms/alz" target="_blank" style="color:var(--accent);">Azure Landing Zones documentation</a> | <a href="https://github.com/Azure/Azure-Landing-Zones-Library" target="_blank" style="color:var(--accent);">ALZ Library (GitHub)</a> | <a href="https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ready/landing-zone/" target="_blank" style="color:var(--accent);">Cloud Adoption Framework: Landing Zones</a></p>
+    </div>
+</details>
 </section>
 "@
     }
@@ -3022,26 +3705,32 @@ $(if ($alzDNERows) {
         # CE+ previous results card
         $ydCEPCard = ''
         if ($yd.CEPPreviousResults) {
+            $cepDeltaGuidance = if ($CEPAssessment.Requested) {
+                'Current CEP results are shown in the Governance &amp; Compliance section for comparison.'
+            } else {
+                'Run with <code>-CEP Test</code> to compare current CE+ test results.'
+            }
             $ydCEPCard = @"
 <div class="callout callout-info">
     <span class="callout-icon">&#x1F6E1;&#xFE0F;</span>
     <div>
         <strong>CE+ Test Results (Previous Run)</strong>
         <p>$($yd.CEPPreviousResults.Pass) PASS &nbsp;|&nbsp; $($yd.CEPPreviousResults.Fail) FAIL &nbsp;|&nbsp; $($yd.CEPPreviousResults.Manual) MANUAL</p>
-        <p class="text-dim">Run with <code>-CEP Test</code> to compare current CE+ test results.</p>
+        <p class="text-dim">$cepDeltaGuidance</p>
     </div>
 </div>
 "@
         }
 
         $yamlDeltaSectionHtml = @"
-<hr class="section-sep" data-label="Delta">
-
-<section id="sec-yaml-delta">
-    <div class="section-header">
-        <h2>&#x1F4CA; Delta Assessment</h2>
-        <span class="section-num">Section $totalSections of $totalSections</span>
-    </div>
+    <section id="sec-yaml-delta" class="report-page" data-report-page data-page-group="page-evidence">
+<details class="section-disclosure">
+    <summary>
+        <span>Delta Assessment</span>
+        <span class="section-num">Section $deltaSectionNumber of $totalSections</span>
+        <span class="disclosure-hint">$($yd.CurrTotal) assignments ($ydAssignSign) · $($yd.CurrNC) non-compliant ($ydNCSign) · $($yd.Trend)</span>
+    </summary>
+    <div class="section-content">
 
     <div class="section-intro">
         <p><strong>Purpose:</strong> Comprehensive policy-by-policy comparison against a previous YAML assessment database. Shows new, removed, and changed assignments, compliance drift, effect type shifts, and overall posture trend.</p>
@@ -3063,7 +3752,7 @@ $(if ($yd.CurrExTotal -gt 0 -or $yd.PrevExTotal -gt 0) {
 
 $(if ($yd.NewAssignments.Count -gt 0) {
 @"
-    <details open>
+    <details class="report-disclosure depth-2">
         <summary>&#x2795; New Assignments ($($yd.NewAssignments.Count))</summary>
         <div class="details-content">
             <div class="table-wrap">
@@ -3079,7 +3768,7 @@ $(if ($yd.NewAssignments.Count -gt 0) {
 
 $(if ($yd.RemovedAssignments.Count -gt 0) {
 @"
-    <details open>
+    <details class="report-disclosure depth-2">
         <summary>&#x2796; Removed Assignments ($($yd.RemovedAssignments.Count))</summary>
         <div class="details-content">
             <div class="table-wrap">
@@ -3095,7 +3784,7 @@ $(if ($yd.RemovedAssignments.Count -gt 0) {
 
 $(if ($yd.ChangedAssignments.Count -gt 0) {
 @"
-    <details open>
+    <details class="report-disclosure depth-2">
         <summary>&#x1F504; Changed Assignments ($($yd.ChangedAssignments.Count))</summary>
         <div class="details-content">
             <div class="table-wrap">
@@ -3180,260 +3869,8 @@ $(if ($yd.NewAssignments.Count -eq 0 -and $yd.RemovedAssignments.Count -eq 0 -an
     '<div class="callout callout-success"><span class="callout-icon">&#x2705;</span><div><strong>No Changes Detected</strong><p>The policy landscape is identical to the previous snapshot.</p></div></div>'
 })
 
-</section>
-"@
-    }
-
-    # ── AI Executive Insights section HTML ──
-    $aiInsightsSectionHtml = ''
-    if ($AIInsights) {
-        $aiPostureIcon = switch ($AIInsights.posture) {
-            'Excellent'          { '&#x2705;' }
-            'Good'               { '&#x1F7E2;' }
-            'Needs Improvement'  { '&#x1F7E0;' }
-            'At Risk'            { '&#x1F534;' }
-            default              { '&#x2753;' }
-        }
-        $aiPostureClass = switch ($AIInsights.posture) {
-            'Excellent'          { 'card-green' }
-            'Good'               { 'card-green' }
-            'Needs Improvement'  { 'card-amber' }
-            'At Risk'            { 'card-red' }
-            default              { 'card-gray' }
-        }
-
-        # ── Build situation summary: group ALL sentences by topic, render once per topic ──
-        $aiSummaryHtml = ''
-        if ($AIInsights.situationSummary) {
-            # Topic definitions in display order
-            $topicDefs = [ordered]@{
-                'posture'      = @{ pattern = 'enforcement|overall|posture|total.*assignments|policy.*landscape|policy.*mix|initiative.*mix|fragmented|detection.heavy'; icon = '&#x1F4CA;'; label = 'Overall Posture &amp; Enforcement'; color = '#5bc0de' }
-                'alz'          = @{ pattern = 'landing.zone|ALZ|well.architected|alignment|coverage.*recommended|guardrail|Enforce-GR'; icon = '&#x1F6EC;'; label = 'Landing Zone Alignment'; color = '#337ab7' }
-                'security'     = @{ pattern = 'security|high.risk|vulnerabilit|threat|defend|control.*balance|deny.*audit|preventive|enforcement.gap|imbalance'; icon = '&#x1F512;'; label = 'Security &amp; Control Balance'; color = '#d9534f' }
-                'compliance'   = @{ pattern = 'compliance|non.compliant|remediat|DINE.*broken|managed.identity|drift'; icon = '&#x1F4DD;'; label = 'Compliance &amp; Remediation'; color = '#f0ad4e' }
-                'architecture' = @{ pattern = 'architect|scope.*distribution|management.group|subscription.level|resource.group|category.*break|top.heavy|MG.level'; icon = '&#x1F3D7;'; label = 'Scope Architecture'; color = '#5bc0de' }
-                'cost'         = @{ pattern = 'cost|budget|expense|deploy.*agent|monitoring.*agent|log.analytics|defender.*plan|\$\d|per.server|per.month|ingestion'; icon = '&#x1F4B0;'; label = 'Cost Governance'; color = '#f0ad4e' }
-                'exemptions'   = @{ pattern = 'exemption|waiver|flexibility|governance.*simplif'; icon = '&#x1F4CB;'; label = 'Exemptions'; color = '#777' }
-                'risks'        = @{ pattern = 'risk.*compound|key.risk|critical.*factor|combined|compound|when.*combined|overall.*risk'; icon = '&#x26A0;&#xFE0F;'; label = 'Key Risks &amp; Compounding Factors'; color = '#d9534f' }
-            }
-
-            # Split into sentences
-            $sentences = [regex]::Split($AIInsights.situationSummary, '(?<=[.!?])\s+(?=[A-Z])')
-
-            # Pass 1: assign each sentence to its best-matching topic
-            $topicBuckets = [ordered]@{}
-            foreach ($key in $topicDefs.Keys) { $topicBuckets[$key] = [System.Collections.Generic.List[string]]::new() }
-            $uncategorized = [System.Collections.Generic.List[string]]::new()
-
-            foreach ($sentence in $sentences) {
-                $matched = $false
-                foreach ($key in $topicDefs.Keys) {
-                    if ($sentence -match $topicDefs[$key].pattern) {
-                        [void]$topicBuckets[$key].Add($sentence)
-                        $matched = $true
-                        break
-                    }
-                }
-                if (-not $matched) { [void]$uncategorized.Add($sentence) }
-            }
-
-            # Distribute uncategorized sentences to the previous or nearest topic
-            # (heuristic: append to risks if exists, otherwise to posture)
-            if ($uncategorized.Count -gt 0) {
-                $fallbackKey = if ($topicBuckets['risks'].Count -gt 0) { 'risks' } else { 'posture' }
-                foreach ($s in $uncategorized) { [void]$topicBuckets[$fallbackKey].Add($s) }
-            }
-
-            # Pass 2: render one consolidated block per topic (skip empty)
-            $summaryParts = [System.Collections.Generic.List[string]]::new()
-            foreach ($key in $topicDefs.Keys) {
-                if ($topicBuckets[$key].Count -eq 0) { continue }
-                $td = $topicDefs[$key]
-                $combinedText = [System.Web.HttpUtility]::HtmlEncode(($topicBuckets[$key] -join ' '))
-                [void]$summaryParts.Add(@"
-<div style="margin-bottom:16px;padding:14px 18px;border-left:4px solid $($td.color);background:rgba(255,255,255,0.03);border-radius:0 8px 8px 0;">
-    <div style="font-weight:700;font-size:0.92rem;margin-bottom:8px;color:$($td.color);letter-spacing:0.3px;">$($td.icon) $($td.label)</div>
-    <p style="margin:0;line-height:1.8;color:var(--text-dim);font-size:0.88rem;">$combinedText</p>
-</div>
-"@)
-            }
-            $aiSummaryHtml = $summaryParts -join "`n"
-        }
-
-        # ── Build top drivers as styled cards ──
-        $aiDriversHtml = ''
-        if ($AIInsights.topDrivers -and $AIInsights.topDrivers.Count -gt 0) {
-            $driverCards = @()
-            $driverIdx = 0
-            foreach ($driver in $AIInsights.topDrivers) {
-                $driverIdx++
-                $dBorderColor = switch ($driverIdx) { 1 { '#d9534f' }; 2 { '#f0ad4e' }; 3 { '#5bc0de' }; default { '#777' } }
-                $driverCards += @"
-<div style="flex:1;min-width:200px;padding:12px 16px;border-left:3px solid $dBorderColor;background:rgba(255,255,255,0.03);border-radius:0 6px 6px 0;">
-    <span style="font-weight:700;color:$dBorderColor;font-size:1.1rem;">$driverIdx.</span>
-    <span style="color:var(--text-main);font-size:0.88rem;">$([System.Web.HttpUtility]::HtmlEncode($driver))</span>
-</div>
-"@
-            }
-            $aiDriversHtml = @"
-<h3 style="margin-top:24px;">&#x1F50D; Top Risk Drivers</h3>
-<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
-$($driverCards -join "`n")
-</div>
-"@
-        }
-
-        # ── Build actions table with priority badges and timeline ──
-        $aiActionsHtml = ''
-        if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
-            $actionRows = ($AIInsights.actions | ForEach-Object {
-                $pClass = switch ($_.priority) { 'P1' { 'status-fail' }; 'P2' { 'status-warn' }; 'P3' { 'status-skip' }; default { '' } }
-                $pTimeline = switch ($_.priority) { 'P1' { '<br><span style="font-size:0.7rem;opacity:0.7;">Immediate</span>' }; 'P2' { '<br><span style="font-size:0.7rem;opacity:0.7;">This Week</span>' }; 'P3' { '<br><span style="font-size:0.7rem;opacity:0.7;">This Month</span>' }; default { '' } }
-                $safeTitle = [System.Web.HttpUtility]::HtmlEncode($_.title)
-                $safeDetail = [System.Web.HttpUtility]::HtmlEncode($_.detail)
-                $safeEffort = [System.Web.HttpUtility]::HtmlEncode($_.effort)
-                "<tr><td style='text-align:center;'><span class='badge $pClass' style='font-size:0.9rem;padding:4px 10px;'>$($_.priority)</span>$pTimeline</td><td><strong>$safeTitle</strong></td><td><span class='badge' style='background:rgba(255,255,255,0.1);'>$safeEffort</span></td><td style='font-size:0.82rem;color:var(--text-dim);line-height:1.6;'>$safeDetail</td></tr>"
-            }) -join "`n"
-            $aiActionsHtml = @"
-<h3 style="margin-top:24px;">&#x1F3AF; Prioritized Action Plan</h3>
-<div class="table-wrap">
-<table style="width:100%;">
-<thead><tr><th style="width:80px;text-align:center;">Priority</th><th style="width:25%;">Action</th><th style="width:80px;">Effort</th><th>Detailed Guidance</th></tr></thead>
-<tbody>$actionRows</tbody>
-</table>
-</div>
-"@
-        }
-
-        # ── Trend interpretation ──
-        $aiTrendHtml = if ($AIInsights.trendInterpretation) {
-            @"
-<h3 style="margin-top:24px;">&#x1F4C8; Trend Interpretation</h3>
-<div style="padding:12px 16px;border-left:3px solid #5bc0de;background:rgba(255,255,255,0.03);border-radius:0 6px 6px 0;">
-    <p style="margin:0;line-height:1.7;color:var(--text-dim);font-size:0.88rem;">$([System.Web.HttpUtility]::HtmlEncode($AIInsights.trendInterpretation))</p>
-</div>
-"@
-        } else { '' }
-
-        # ── Compliance Gaps table ──
-        $aiComplianceGapsHtml = ''
-        if ($AIInsights.complianceGaps -and $AIInsights.complianceGaps.Count -gt 0) {
-            $gapRows = ($AIInsights.complianceGaps | ForEach-Object {
-                $riskClass = switch ($_.risk) { 'High' { 'status-fail' }; 'Medium' { 'status-warn' }; 'Low' { 'status-skip' }; default { '' } }
-                $safeArea = [System.Web.HttpUtility]::HtmlEncode($_.area)
-                $safeFinding = [System.Web.HttpUtility]::HtmlEncode($_.finding)
-                $safeRef = [System.Web.HttpUtility]::HtmlEncode($_.reference)
-                "<tr><td><strong>$safeArea</strong></td><td style='line-height:1.6;'>$safeFinding</td><td style='text-align:center;'><span class='badge $riskClass'>$($_.risk)</span></td><td style='font-size:0.82rem;color:var(--text-dim);'>$safeRef</td></tr>"
-            }) -join "`n"
-            $aiComplianceGapsHtml = @"
-<h3 style="margin-top:24px;">&#x1F6A8; Compliance Gaps</h3>
-<div class="table-wrap">
-<table style="width:100%;">
-<thead><tr><th style="width:20%;">Area</th><th>Finding</th><th style="width:70px;text-align:center;">Risk</th><th style="width:25%;">Framework Reference</th></tr></thead>
-<tbody>$gapRows</tbody>
-</table>
-</div>
-"@
-        }
-
-        # ── Framework Alignment cards ──
-        $aiFrameworkHtml = ''
-        if ($AIInsights.frameworkAlignment) {
-            $fa = $AIInsights.frameworkAlignment
-            $fCards = @()
-            if ($fa.azureLandingZone) {
-                $alzStatusClass = switch ($fa.azureLandingZone.status) { 'Aligned' { 'card-green' }; 'Partially Aligned' { 'card-amber' }; 'Not Aligned' { 'card-red' }; default { 'card-gray' } }
-                $alzStatusIcon = switch ($fa.azureLandingZone.status) { 'Aligned' { '&#x2705;' }; 'Partially Aligned' { '&#x1F7E0;' }; 'Not Aligned' { '&#x274C;' }; default { '&#x2753;' } }
-                $fCards += @"
-<div class="card $alzStatusClass" style="flex:1;min-width:250px;padding:16px;">
-    <div class="card-num" style="font-size:1.5rem;">$alzStatusIcon</div>
-    <div class="card-label" style="font-size:0.95rem;font-weight:600;">Azure Landing Zone</div>
-    <div style="font-size:0.8rem;color:var(--text-dim);margin-top:6px;line-height:1.5;">$([System.Web.HttpUtility]::HtmlEncode($fa.azureLandingZone.detail))</div>
-</div>
-"@
-            }
-            if ($fa.securityBaseline) {
-                $secStatusClass = switch ($fa.securityBaseline.status) { 'Strong' { 'card-green' }; 'Moderate' { 'card-amber' }; 'Weak' { 'card-red' }; default { 'card-gray' } }
-                $secStatusIcon = switch ($fa.securityBaseline.status) { 'Strong' { '&#x1F6E1;' }; 'Moderate' { '&#x1F7E0;' }; 'Weak' { '&#x26A0;' }; default { '&#x2753;' } }
-                $fCards += @"
-<div class="card $secStatusClass" style="flex:1;min-width:250px;padding:16px;">
-    <div class="card-num" style="font-size:1.5rem;">$secStatusIcon</div>
-    <div class="card-label" style="font-size:0.95rem;font-weight:600;">Security Baseline</div>
-    <div style="font-size:0.8rem;color:var(--text-dim);margin-top:6px;line-height:1.5;">$([System.Web.HttpUtility]::HtmlEncode($fa.securityBaseline.detail))</div>
-</div>
-"@
-            }
-            if ($fa.wellArchitected) {
-                $waStatusClass = switch ($fa.wellArchitected.status) { 'Good' { 'card-green' }; 'Needs Work' { 'card-amber' }; 'Poor' { 'card-red' }; default { 'card-gray' } }
-                $waStatusIcon = switch ($fa.wellArchitected.status) { 'Good' { '&#x2705;' }; 'Needs Work' { '&#x1F527;' }; 'Poor' { '&#x274C;' }; default { '&#x2753;' } }
-                $fCards += @"
-<div class="card $waStatusClass" style="flex:1;min-width:250px;padding:16px;">
-    <div class="card-num" style="font-size:1.5rem;">$waStatusIcon</div>
-    <div class="card-label" style="font-size:0.95rem;font-weight:600;">Well-Architected</div>
-    <div style="font-size:0.8rem;color:var(--text-dim);margin-top:6px;line-height:1.5;">$([System.Web.HttpUtility]::HtmlEncode($fa.wellArchitected.detail))</div>
-</div>
-"@
-            }
-            if ($fCards.Count -gt 0) {
-                $aiFrameworkHtml = @"
-<h3 style="margin-top:24px;">&#x1F4D0; Framework Alignment Assessment</h3>
-<div class="summary-cards" style="margin-bottom:16px;">
-$($fCards -join "`n")
-</div>
-"@
-            }
-        }
-
-        $aiDisclaimer = [System.Web.HttpUtility]::HtmlEncode($AIInsights.disclaimer ?? 'All metrics sourced from Azure Resource Graph. Verify before applying.')
-        $aiProvider = [System.Web.HttpUtility]::HtmlEncode($AIInsights._provider ?? 'Unknown')
-        $aiModel = [System.Web.HttpUtility]::HtmlEncode($AIInsights._model ?? 'default')
-        $aiTimestamp = if ($AIInsights._generatedAt) { try { [datetime]::Parse($AIInsights._generatedAt).ToString('yyyy-MM-dd HH:mm') } catch { $AIInsights._generatedAt } } else { 'N/A' }
-
-        $aiInsightsSectionHtml = @"
-<hr class="section-sep" data-label="AI">
-
-<section id="sec-ai-insights">
-    <div class="section-header">
-        <h2>&#x1F916; AI Executive Insights</h2>
-        <span class="section-num"><span class="experimental-tag">AI</span></span>
     </div>
-
-    <div class="section-intro">
-        <p><strong>Purpose:</strong> AI-generated narrative analysis synthesising findings from all assessment areas into a prioritised executive briefing with actionable recommendations.</p>
-        <p><strong>Provider:</strong> $aiProvider &nbsp;&bull;&nbsp; <strong>Model:</strong> $aiModel &nbsp;&bull;&nbsp; <strong>Temperature:</strong> 0 (deterministic) &nbsp;&bull;&nbsp; <strong>Generated:</strong> $aiTimestamp</p>
-    </div>
-
-    <div class="note-box" style="margin-bottom:16px;"><span class="note-icon">&#x1F4AC;</span><span>AI receives <strong>only pre-computed metrics</strong> from the deterministic assessment above. It does not query Azure directly and cannot invent numbers. All claims should be verifiable against the preceding sections.</span></div>
-
-    <div class="summary-cards">
-        <div class="card $aiPostureClass" style="min-width:220px;">
-            <div class="card-num" style="font-size:2rem;">$aiPostureIcon</div>
-            <div class="card-label" style="font-size:1rem;font-weight:600;">$([System.Web.HttpUtility]::HtmlEncode($AIInsights.posture))</div>
-        </div>
-$(if ($AIInsights.topDrivers -and $AIInsights.topDrivers.Count -gt 0) {
-    "        <div class='card card-blue'><div class='card-num'>$($AIInsights.topDrivers.Count)</div><div class='card-label'>Risk Drivers</div></div>"
-})
-$(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
-    $p1Count = @($AIInsights.actions | Where-Object { $_.priority -eq 'P1' }).Count
-    "        <div class='card card-red'><div class='card-num'>$p1Count</div><div class='card-label'>Immediate Actions</div></div>"
-    "        <div class='card card-amber'><div class='card-num'>$($AIInsights.actions.Count)</div><div class='card-label'>Total Actions</div></div>"
-})
-    </div>
-
-    <h3 style="margin-top:24px;">&#x1F4CB; Situation Summary</h3>
-    $aiSummaryHtml
-
-    $aiDriversHtml
-
-    $aiActionsHtml
-
-    $aiComplianceGapsHtml
-
-    $aiFrameworkHtml
-
-    $aiTrendHtml
-
-    <div class="callout callout-info" style="margin-top:24px;"><span class="callout-icon">&#x2139;&#xFE0F;</span><div><strong>Disclaimer:</strong> $aiDisclaimer</div></div>
+</details>
 </section>
 "@
     }
@@ -3452,8 +3889,7 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
     $testSummaryCards = ''
     if ($CEPTestResults.Count -gt 0) {
         $testRows = ($CEPTestResults | ForEach-Object {
-            $statusClass = switch ($_.'Status') { 'PASS' { 'status-pass' }; 'FAIL' { 'status-fail' }; 'WARN' { 'status-warn' }; 'SKIP' { 'status-skip' }; 'MANUAL' { 'status-manual' }; default { '' } }
-            "<tr><td>$($_.'Test #')</td><td>$($_.'Control Group')</td><td>$($_.'Test Name')</td><td><span class=`"badge $statusClass`">$($_.'Status')</span></td><td>$($_.'Details')</td><td>$($_.'Non-Compliant')</td><td>$($_.'Compliant')</td><td>$($_.'Total Resources')</td></tr>"
+            ConvertTo-CEPTestHtmlRow -TestResult $_
         }) -join "`n"
         $testSummaryCards = @"
 <div class="summary-cards">
@@ -3650,10 +4086,16 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
     }
 
     # ── Coverage Gaps ──
+    $missingControlScopeIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $AssessmentFindings | Where-Object Category -eq 'Missing Controls' | ForEach-Object {
+        $_.ScopeIds | ForEach-Object { if ($_) { [void]$missingControlScopeIds.Add($_) } }
+    }
     $scopesWithPolicies = $PolicyResults | Group-Object 'Scope Name' | ForEach-Object {
-        $hasDeny = ($_.Group | Where-Object { $_.'Effect Type' -eq 'Deny' }).Count -gt 0
-        $hasDINE = ($_.Group | Where-Object { $_.'Effect Type' -eq 'DeployIfNotExists' -or $_.'Effect Type' -eq 'Modify' }).Count -gt 0
-        $hasAudit = ($_.Group | Where-Object { $_.'Effect Type' -eq 'Audit' -or $_.'Effect Type' -eq 'AuditIfNotExists' }).Count -gt 0
+        $scopeEffectCounts = Get-EffectivePolicyEffectCounts -PolicyResults @($_.Group)
+        $scopeId = if ($_.Group[0].Scope) { $_.Group[0].Scope } else { $_.Name }
+        $hasDeny = -not $missingControlScopeIds.Contains($scopeId)
+        $hasDINE = $scopeEffectCounts.Remediating -gt 0
+        $hasAudit = $scopeEffectCounts.Audit -gt 0
         $ncRes = ($_.Group | ForEach-Object { if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 } } | Measure-Object -Sum).Sum
         [PSCustomObject]@{
             ScopeName = $_.Name; ScopeType = $_.Group[0].'Scope Type'; Count = $_.Count
@@ -3672,14 +4114,22 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
     $scopesNoDINE = @($scopesWithPolicies | Where-Object { -not $_.HasDINE })
 
     # Enforcement gap items
-    $enforcementGapItems = @($PolicyResults | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' })
+    $enforcementGapAssignmentIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $criticalEnforcementAssignmentIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $AssessmentFindings | Where-Object Category -eq 'Enforcement Gap' | ForEach-Object {
+        foreach ($assignmentId in $_.AssignmentIds) {
+            [void]$enforcementGapAssignmentIds.Add($assignmentId)
+            if ($_.Severity -eq 'Critical') { [void]$criticalEnforcementAssignmentIds.Add($assignmentId) }
+        }
+    }
+    $enforcementGapItems = @($PolicyResults | Where-Object { $enforcementGapAssignmentIds.Contains($_.'Assignment ID') })
     $enforcementGapRows = ($enforcementGapItems | ForEach-Object {
         $impactClass = switch ($_.'Security Impact') { 'High' { 'nc-bad' }; 'Medium' { 'warn-text' }; default { '' } }
         "<tr><td>$($_.'Display Name')</td><td>$($_.'Scope Name')</td><td>$($_.'Effect Type')</td><td class=`"$impactClass`">$($_.'Security Impact')</td><td>$($_.'Risk Level')</td></tr>"
     }) -join "`n"
 
     # High-security enforcement issues
-    $highSecEnforceIssues = @($PolicyResults | Where-Object { $_.'Security Impact' -eq 'High' -and $_.'Enforcement Mode' -eq 'DoNotEnforce' })
+    $highSecEnforceIssues = @($PolicyResults | Where-Object { $criticalEnforcementAssignmentIds.Contains($_.'Assignment ID') })
 
     # ── Security posture rows ──
     $securityRows = ($PolicyResults | Sort-Object @{Expression={switch ($_.'Risk Level') { 'High' {0}; 'Medium' {1}; default {2} }}}, @{Expression={switch ($_.'Security Impact') { 'High' {0}; 'Medium' {1}; default {2} }}} | ForEach-Object {
@@ -3690,170 +4140,30 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
         "<tr><td>$($_.'Display Name')</td><td><span class=`"badge $riskClass`">$($_.'Risk Level')</span></td><td class=`"$secClass`">$($_.'Security Impact')</td><td>$catVal</td><td>$($_.'Effect Type')</td><td>$($_.'Enforcement Mode')</td><td class=`"$ncClass`">$ncVal</td><td>$($_.'Scope Name')</td></tr>"
     }) -join "`n"
 
-    # ── Cost impact rows ──
-    $costRows = ($PolicyResults | Where-Object { $_.'Cost Impact' -ne 'None' -and $_.'Cost Impact' -ne '' -and $_.'Cost Impact' } | Sort-Object @{Expression={switch ($_.'Cost Impact') { 'High' {0}; 'Medium' {1}; default {2} }}} | ForEach-Object {
-        $costClass = switch ($_.'Cost Impact') { 'High' { 'risk-high' }; 'Medium' { 'risk-med' }; default { 'risk-low' } }
+    # ── Cost exposure rows ──
+    $costRows = ($PolicyResults | Where-Object { $_.'Cost Exposure' -ne 'None' -and $_.'Cost Exposure' -ne '' -and $_.'Cost Exposure' } | Sort-Object @{Expression={switch ($_.'Cost Exposure') { 'High' {0}; 'Medium' {1}; default {2} }}} | ForEach-Object {
+        $costClass = switch ($_.'Cost Exposure') { 'High' { 'risk-high' }; 'Medium' { 'risk-med' }; default { 'risk-low' } }
         $opsClass = switch ($_.'Operational Overhead') { 'High' { 'risk-high' }; 'Medium' { 'risk-med' }; default { 'risk-low' } }
         $catVal = if ($_.Category) { $_.Category } else { '-' }
-        "<tr><td>$($_.'Display Name')</td><td><span class=`"badge $costClass`">$($_.'Cost Impact')</span></td><td><span class=`"badge $opsClass`">$($_.'Operational Overhead')</span></td><td>$catVal</td><td>$($_.'Effect Type')</td><td>$($_.'Enforcement Mode')</td><td>$($_.'Scope Name')</td></tr>"
+        "<tr><td>$($_.'Display Name')</td><td><span class=`"badge $costClass`">$($_.'Cost Exposure')</span></td><td><span class=`"badge $opsClass`">$($_.'Operational Overhead')</span></td><td>$catVal</td><td>$($_.'Effect Type')</td><td>$($_.'Enforcement Mode')</td><td>$($_.'Scope Name')</td></tr>"
+    }) -join "`n"
+
+    $validCostEvidence = @($CostEvidenceRecords | Where-Object { $null -ne $_ -and (Test-CostEvidenceRecord -Record $_) })
+    $costEvidenceRows = ($validCostEvidence | ForEach-Object {
+        $amount = ([decimal]$_.Amount).ToString('0.########', [System.Globalization.CultureInfo]::InvariantCulture)
+        $description = [System.Net.WebUtility]::HtmlEncode([string]$_.Description)
+        $unit = [System.Net.WebUtility]::HtmlEncode([string]$_.Unit)
+        $region = [System.Net.WebUtility]::HtmlEncode([string]$_.Region)
+        $currency = [System.Net.WebUtility]::HtmlEncode([string]$_.Currency)
+        $source = [System.Net.WebUtility]::HtmlEncode([string]$_.Source)
+        $sourceUri = [System.Net.WebUtility]::HtmlEncode([string]$_.SourceUri)
+        $retrievedAt = [System.Net.WebUtility]::HtmlEncode([string]$_.RetrievedAt)
+        $priceOrCostDate = [System.Net.WebUtility]::HtmlEncode([string]$_.PriceOrCostDate)
+        "<tr><td>$description</td><td>$amount $currency</td><td>$unit</td><td>$region</td><td><a href=`"$sourceUri`" target=`"_blank`">$source</a></td><td>$priceOrCostDate</td><td>$retrievedAt</td></tr>"
     }) -join "`n"
 
     # ── Remediation Plan ──
-    $remediationItems = @()
-
-    # Critical: High-security DoNotEnforce
-    $PolicyResults | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' -and $_.'Security Impact' -eq 'High' } | ForEach-Object {
-        $ncResVal = if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }
-        $remediationItems += [PSCustomObject]@{
-            Priority = 'Critical'; Phase = '30-day'
-            Action = "Enable enforcement for '$($_.'Display Name')'"
-            Category = 'Enforcement Gap'; Effort = 'Low'
-            Impact = "High-security policy in audit-only mode — non-compliant deployments are detected but NOT blocked"
-            Scope = $_.'Scope Name'; NCResources = $ncResVal
-        }
-    }
-    # Critical: High-risk policies (regardless of enforcement mode)
-    $PolicyResults | Where-Object { $_.'Risk Level' -eq 'High' -and $_.'Enforcement Mode' -ne 'DoNotEnforce' } | ForEach-Object {
-        $ncResVal = if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }
-        if ($ncResVal -gt 0) {
-            $remediationItems += [PSCustomObject]@{
-                Priority = 'Critical'; Phase = '30-day'
-                Action = "Remediate $ncResVal non-compliant resources for high-risk policy '$($_.'Display Name')'"
-                Category = 'High-Risk NC'; Effort = 'Medium'
-                Impact = "Enforced high-risk policy with active non-compliance — resources are at risk"
-                Scope = $_.'Scope Name'; NCResources = $ncResVal
-            }
-        }
-    }
-    # High: Any policy with NC resources (threshold lowered from >10 to >0 for meaningful output)
-    $PolicyResults | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) } | Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | ForEach-Object {
-        $ncResVal = [int]$_.'Non-Compliant Resources'
-        $effort = if ($ncResVal -gt 50) { 'High' } elseif ($ncResVal -gt 10) { 'Medium' } else { 'Low' }
-        $priority = if ($ncResVal -gt 50) { 'Critical' } elseif ($ncResVal -gt 10) { 'High' } else { 'High' }
-        $phase = if ($ncResVal -gt 50) { '30-day' } elseif ($ncResVal -gt 10) { '60-day' } else { '60-day' }
-        $remediationItems += [PSCustomObject]@{
-            Priority = $priority; Phase = $phase
-            Action = "Remediate $ncResVal non-compliant resources for '$($_.'Display Name')'"
-            Category = 'Non-Compliance'; Effort = $effort
-            Impact = "Reduces compliance gap by $ncResVal resources in $($_.'Category') category"
-            Scope = $_.'Scope Name'; NCResources = $ncResVal
-        }
-    }
-    # DINE/Modify non-compliance requires remediation-task and identity verification.
-    $PolicyResults | Where-Object {
-        ($_.'Effect Type' -match 'DeployIfNotExists|deployIfNotExists|Modify|modify') -and
-        ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0)
-    } | ForEach-Object {
-        $ncResVal = [int]$_.'Non-Compliant Resources'
-        $remediationItems += [PSCustomObject]@{
-            Priority = 'Medium'; Phase = '60-day'
-            Action = "Verify remediation status for '$($_.'Display Name')' ($ncResVal NC resources)"
-            Category = 'Remediation Review'; Effort = 'Medium'
-            Impact = "Check remediation task state, assignment identity permissions, evaluation timing, and scope before classifying this DINE/Modify policy as broken"
-            Scope = $_.'Scope Name'; NCResources = $ncResVal
-        }
-    }
-    # High: Medium/High security policies in DoNotEnforce (not just High security)
-    $PolicyResults | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' -and $_.'Security Impact' -eq 'Medium' -and $_.'Risk Level' -in @('High','Medium') } | Select-Object -First 10 | ForEach-Object {
-        $ncResVal = if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }
-        $remediationItems += [PSCustomObject]@{
-            Priority = 'High'; Phase = '60-day'
-            Action = "Consider enforcing medium-security policy '$($_.'Display Name')'"
-            Category = 'Enforcement Gap'; Effort = 'Low'
-            Impact = "Policy in audit-only mode — $($_.'Category') category coverage is detection-only, not preventive"
-            Scope = $_.'Scope Name'; NCResources = $ncResVal
-        }
-    }
-    # High: ALZ recommended policies missing (if ALZ data available)
-    if ($ALZData -and $ALZData.MissingPolicies -and $ALZData.MissingPolicies.Count -gt 0) {
-        $alzMissingByCategory = $ALZData.MissingPolicies | Group-Object Category
-        foreach ($group in $alzMissingByCategory) {
-            $policyNames = ($group.Group | Select-Object -First 3 | ForEach-Object { $_.PolicyPattern }) -join ', '
-            $moreCount = if ($group.Group.Count -gt 3) { " + $($group.Group.Count - 3) more" } else { '' }
-            $remediationItems += [PSCustomObject]@{
-                Priority = 'High'; Phase = '60-day'
-                Action = "Deploy $($group.Group.Count) missing ALZ policies in '$($group.Name)' ($policyNames$moreCount)"
-                Category = 'ALZ Gap'; Effort = 'Medium'
-                Impact = "Azure Landing Zone recommended policies not assigned — reduces alignment with Microsoft best practices"
-                Scope = 'Tenant-wide'; NCResources = 0
-            }
-        }
-    }
-    # High: ALZ recommended policies in DoNotEnforce
-    if ($ALZData -and $ALZData.DoNotEnforcePolicies -and $ALZData.DoNotEnforcePolicies.Count -gt 0) {
-        $ALZData.DoNotEnforcePolicies | Select-Object -First 10 | ForEach-Object {
-            $remediationItems += [PSCustomObject]@{
-                Priority = 'High'; Phase = '60-day'
-                Action = "Enforce ALZ recommended policy '$($_.PolicyName)' ($($_.Category))"
-                Category = 'ALZ Enforcement'; Effort = 'Low'
-                Impact = "ALZ recommended policy assigned but in audit-only mode — not actively protecting"
-                Scope = if ($_.ActualName) { $_.ActualName } else { $_.PolicyName }; NCResources = 0
-            }
-        }
-    }
-    # High: High-cost DINE policies that are enforced — flag for cost review
-    $PolicyResults | Where-Object { $_.'Cost Impact' -eq 'High' -and $_.'Enforcement Mode' -eq 'Default' -and $_.'Effect Type' -match 'DeployIfNotExists|deployIfNotExists' } | Select-Object -First 5 | ForEach-Object {
-        $remediationItems += [PSCustomObject]@{
-            Priority = 'Medium'; Phase = '60-day'
-            Action = "Review cost impact of enforced DINE policy '$($_.'Display Name')'"
-            Category = 'Cost Optimisation'; Effort = 'Low'
-            Impact = "Active DINE policy deploying agents/resources — verify Defender/monitoring costs are budgeted ($($_.'Category') category)"
-            Scope = $_.'Scope Name'; NCResources = 0
-        }
-    }
-    # CE+ test failures
-    if ($CEPTestResults.Count -gt 0) {
-        $CEPTestResults | Where-Object { $_.'Status' -eq 'FAIL' } | ForEach-Object {
-            $remediationItems += [PSCustomObject]@{
-                Priority = 'High'; Phase = '60-day'
-                Action = "Fix failing CE+ test: $($_.'Test Name')"
-                Category = 'CE+ Compliance'; Effort = 'Medium'
-                Impact = "CE+ certification requirement — $($_.'Details')"
-                Scope = $_.'Control Group'; NCResources = if ($_.'Non-Compliant' -match '^\d+$') { [int]$_.'Non-Compliant' } else { 0 }
-            }
-        }
-        $CEPTestResults | Where-Object { $_.'Status' -eq 'WARN' } | ForEach-Object {
-            $remediationItems += [PSCustomObject]@{
-                Priority = 'Medium'; Phase = '90-day'
-                Action = "Review CE+ warning: $($_.'Test Name')"
-                Category = 'CE+ Compliance'; Effort = 'Low'
-                Impact = "$($_.'Details')"
-                Scope = $_.'Control Group'; NCResources = if ($_.'Non-Compliant' -match '^\d+$') { [int]$_.'Non-Compliant' } else { 0 }
-            }
-        }
-    }
-    # Medium: Scopes without preventive controls
-    $scopesNoDeny | ForEach-Object {
-        $remediationItems += [PSCustomObject]@{
-            Priority = 'Medium'; Phase = '90-day'
-            Action = "Add preventive (Deny) policies to scope '$($_.ScopeName)'"
-            Category = 'Coverage Gap'; Effort = 'Medium'
-            Impact = "Scope has $($_.Count) assignments but no Deny policies — non-compliant deployments not blocked"
-            Scope = $_.ScopeName; NCResources = $_.NCResources
-        }
-    }
-    # Low: Disabled policies
-    $PolicyResults | Where-Object { $_.'Effect Type' -eq 'Disabled' } | ForEach-Object {
-        $remediationItems += [PSCustomObject]@{
-            Priority = 'Low'; Phase = '90-day'
-            Action = "Review disabled policy '$($_.'Display Name')' — remove if unused"
-            Category = 'Housekeeping'; Effort = 'Low'
-            Impact = "Reduces clutter and improves policy inventory clarity"
-            Scope = $_.'Scope Name'; NCResources = 0
-        }
-    }
-
-    # Deduplicate: same action text should only appear once (keep highest priority)
-    $seenActions = @{}
-    $dedupedItems = [System.Collections.Generic.List[object]]::new()
-    foreach ($item in $remediationItems) {
-        $key = $item.Action
-        if (-not $seenActions.ContainsKey($key)) {
-            $seenActions[$key] = $true
-            [void]$dedupedItems.Add($item)
-        }
-    }
-    $remediationItems = $dedupedItems | Sort-Object -Property @{Expression={switch ($_.Priority) { 'Critical' {0}; 'High' {1}; 'Medium' {2}; default {3} }}}, @{Expression={$_.NCResources}; Descending=$true} | Select-Object -First 50
+    $remediationItems = @(ConvertTo-AssessmentActions -AssessmentFindings $AssessmentFindings | Select-Object -First 50)
 
     $remCritical = @($remediationItems | Where-Object { $_.Priority -eq 'Critical' }).Count
     $remHigh = @($remediationItems | Where-Object { $_.Priority -eq 'High' }).Count
@@ -3864,29 +4174,72 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
     $phase90 = @($remediationItems | Where-Object { $_.Phase -eq '90-day' })
 
     $roadmap30Html = if ($phase30.Count -gt 0) {
-        ($phase30 | ForEach-Object { "<li><strong>$($_.Action)</strong><br><span class=`"text-dim`">$($_.Impact) &middot; Effort: $($_.Effort)</span></li>" }) -join "`n"
+        ($phase30 | ForEach-Object { "<li><strong>$($_.Action)</strong><br><span class=`"text-dim`">Finding $(@($_.FindingIds) -join ', ') &middot; $($_.Impact) &middot; Effort: $($_.Effort)</span></li>" }) -join "`n"
     } else { "<li class=`"text-dim`">No critical items identified</li>" }
 
     $roadmap60Html = if ($phase60.Count -gt 0) {
-        ($phase60 | ForEach-Object { "<li><strong>$($_.Action)</strong><br><span class=`"text-dim`">$($_.Impact) &middot; Effort: $($_.Effort)</span></li>" }) -join "`n"
+        ($phase60 | ForEach-Object { "<li><strong>$($_.Action)</strong><br><span class=`"text-dim`">Finding $(@($_.FindingIds) -join ', ') &middot; $($_.Impact) &middot; Effort: $($_.Effort)</span></li>" }) -join "`n"
     } else { "<li class=`"text-dim`">No high-priority items identified</li>" }
 
     $roadmap90Html = if ($phase90.Count -gt 0) {
-        ($phase90 | ForEach-Object { "<li><strong>$($_.Action)</strong><br><span class=`"text-dim`">$($_.Impact) &middot; Effort: $($_.Effort)</span></li>" }) -join "`n"
+        ($phase90 | ForEach-Object { "<li><strong>$($_.Action)</strong><br><span class=`"text-dim`">Finding $(@($_.FindingIds) -join ', ') &middot; $($_.Impact) &middot; Effort: $($_.Effort)</span></li>" }) -join "`n"
     } else { "<li class=`"text-dim`">No medium-priority items identified</li>" }
 
     $remediationRows = ($remediationItems | ForEach-Object {
         $prioClass = switch ($_.Priority) { 'Critical' { 'status-fail' }; 'High' { 'status-nc' }; 'Medium' { 'status-warn' }; default { 'status-skip' } }
         $effortClass = switch ($_.Effort) { 'Low' { 'status-pass' }; 'Medium' { 'status-warn' }; 'High' { 'status-fail' }; default { '' } }
-        "<tr><td><span class=`"badge $prioClass`">$($_.Priority)</span></td><td>$($_.Phase)</td><td>$($_.Action)</td><td><span class=`"badge $effortClass`">$($_.Effort)</span></td><td>$($_.Category)</td><td>$($_.Impact)</td><td>$($_.Scope)</td></tr>"
+        "<tr><td><span class=`"badge $prioClass`">$($_.Priority)</span></td><td>$($_.Phase)</td><td>$($_.Action)<br><span class=`"text-dim`">Finding: $(@($_.FindingIds) -join ', ')</span></td><td><span class=`"badge $effortClass`">$($_.Effort)</span></td><td>$($_.Category)</td><td>$($_.Impact)</td><td>$($_.Scope)</td></tr>"
+    }) -join "`n"
+
+    $remediationEvidencePolicies = @($PolicyResults | Where-Object { $_.'Is Remediating' -and $_.'Remediation Evidence' })
+    $remediationEvidenceRows = ($remediationEvidencePolicies | ForEach-Object {
+        $evidence = $_.'Remediation Evidence'
+        $stateClass = switch ($evidence.State) {
+            'Succeeded' { 'status-pass' }
+            'Failed' { 'status-fail' }
+            'MissingPermissions' { 'status-fail' }
+            'Pending' { 'status-warn' }
+            'NotStarted' { 'status-warn' }
+            default { 'status-skip' }
+        }
+        $displayName = [System.Net.WebUtility]::HtmlEncode([string]$_.'Display Name')
+        $identity = [System.Net.WebUtility]::HtmlEncode("$($evidence.IdentityType) | $($evidence.PrincipalId)")
+        $missingRoles = @($evidence.MissingRoles) -join ', '
+        $roleText = "Required $(@($evidence.RequiredRoles).Count) | Available $(@($evidence.AvailableRoles).Count)"
+        if ($missingRoles) { $roleText += " | Missing: $missingRoles" }
+        $roleText = [System.Net.WebUtility]::HtmlEncode($roleText)
+        $taskText = if ($evidence.SelectedTaskId) {
+            "$($evidence.SelectedTaskState) | $($evidence.SelectedTaskId) | $(@($evidence.TaskRecords).Count) task record(s)"
+        } else { "No task record | $(@($evidence.TaskRecords).Count) task record(s)" }
+        $taskText += " | observed $($evidence.EvidenceTimestamp)"
+        $taskText = [System.Net.WebUtility]::HtmlEncode($taskText)
+        $applicable = if ($null -ne $evidence.ApplicableResourceCount) { [string]$evidence.ApplicableResourceCount } else { 'Not assessed' }
+        $lastEvaluation = if ($evidence.LastEvaluation) { [System.Net.WebUtility]::HtmlEncode([string]$evidence.LastEvaluation) } else { 'Not available' }
+        $scopeControls = "Exemptions $(@($evidence.Exemptions).Count) | notScopes $(@($evidence.NotScopes).Count) | selectors $(@($evidence.ResourceSelectors).Count) | overrides $(@($evidence.Overrides).Count)"
+        $scopeControls = [System.Net.WebUtility]::HtmlEncode($scopeControls)
+        $errorText = @($evidence.Error, $evidence.TaskQueryError, $evidence.RoleQueryError | Where-Object { $_ }) -join ' | '
+        if (-not $errorText) { $errorText = 'None reported' }
+        $errorText = [System.Net.WebUtility]::HtmlEncode($errorText)
+        "<tr><td>$displayName</td><td><span class=`"badge $stateClass`">$($evidence.State)</span></td><td>$identity</td><td>$roleText</td><td>$taskText</td><td>$applicable</td><td>$lastEvaluation</td><td>$scopeControls</td><td>$errorText</td></tr>"
     }) -join "`n"
 
     # ── Key Findings (Executive Summary callouts) ──
     $findingsHtml = ''
     $findingsList = @()
 
+    if ($assessmentState -eq 'NotEvaluated') {
+        $queryRecords = if ($DataQuality) { $DataQuality.TotalRecords } else { 0 }
+        $queryTimestamp = if ($DataQuality) { $DataQuality.Timestamp } else { 'unknown' }
+        $findingsList += "<div class=`"callout callout-info`"><span class=`"callout-icon`">&#x2139;&#xFE0F;</span><div><strong>Not evaluated</strong><p>No policy state evaluations were returned. Compliance has not been established, so zero non-compliance is not reported as a positive finding.</p><p style=`"margin-top:4px;font-size:0.8rem;color:var(--text-dim);`">Data quality: query succeeded; $queryRecords records; timestamp $queryTimestamp; fallback: $(if ($DataQuality -and $DataQuality.FallbackUsed) { 'yes' } else { 'no' }).</p></div></div>"
+    } elseif ($assessmentState -eq 'DataUnavailable') {
+        $failedQueryNames = if ($DataQuality -and $DataQuality.FailedQueries) { @($DataQuality.FailedQueries.Name) -join ', ' } else { 'PolicyStates' }
+        $queryTimestamp = if ($DataQuality) { $DataQuality.Timestamp } else { 'unknown' }
+        $findingsList += "<div class=`"callout callout-warning`"><span class=`"callout-icon`">&#x26A0;&#xFE0F;</span><div><strong>Compliance data unavailable</strong><p>The compliance query failed or returned unusable data ($failedQueryNames). No positive compliance conclusion can be made.</p><p style=`"margin-top:4px;font-size:0.8rem;color:var(--text-dim);`">Data quality: query failed; timestamp $queryTimestamp; fallback: $(if ($DataQuality -and $DataQuality.FallbackUsed) { 'yes' } else { 'no' }).</p></div></div>"
+    }
+
     # Precompute enrichment data for callouts
-    $ncCompliancePct = if ($totalAssignments -gt 0) { [math]::Round((($totalAssignments - $assignmentsWithNC) / $totalAssignments) * 100, 1) } else { 100 }
+    $assignmentsWithoutObservedNC = $totalAssignments - $assignmentsWithNC
+    $assignmentsWithoutObservedNCPct = if ($totalAssignments -gt 0) { [math]::Round(($assignmentsWithoutObservedNC / $totalAssignments) * 100, 1) } else { 100 }
     $topNCTypes = if ($NCExportData.Count -gt 0) {
         ($NCExportData | Select-Object 'Resource ID', 'Resource Type' -Unique | Group-Object 'Resource Type' | Sort-Object Count -Descending | Select-Object -First 3 | ForEach-Object { "$($_.Name) ($($_.Count))" }) -join ', '
     } else { '' }
@@ -3896,66 +4249,189 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
             "$polName ($($_.Count))"
         }) -join ', '
     } else { '' }
-    $scopesNoDenyNames = if ($scopesNoDeny.Count -gt 0 -and $scopesNoDeny.Count -le 10) {
-        ($scopesNoDeny | ForEach-Object { $_.ScopeName }) -join ', '
-    } else { '' }
-
-    if ($highSecEnforceIssues.Count -gt 0) {
-        $findingsList += "<div class=`"callout callout-critical`"><span class=`"callout-icon`">&#x26D4;</span><div><strong>Enforcement Gaps Detected</strong><p>$($highSecEnforceIssues.Count) high-security policies are in audit-only mode (DoNotEnforce). Non-compliant deployments are <strong>NOT being blocked</strong>.</p><p style=`"margin-top:6px;font-size:0.8rem;color:var(--text-dim);`"><em>Recommendation:</em> Switch these assignments to <code>Default</code> enforcement mode to actively prevent non-compliant resources from being created or modified.</p></div></div>"
-    }
-    if ($totalNC -gt 0) {
-        $ncSeverity = if ($totalNC -ge 100) { 'significant' } elseif ($totalNC -ge 30) { 'moderate' } else { 'minor' }
-        $ncSeverityIcon = if ($totalNC -ge 100) { '&#x1F534;' } elseif ($totalNC -ge 30) { '&#x1F7E0;' } else { '&#x1F7E1;' }
-        $findingsList += @"
-<div class="callout callout-warning"><span class="callout-icon">&#x26A0;&#xFE0F;</span><div>
-    <strong>$totalNC Non-Compliant Resources</strong>
-    <p>$ncPolicyCount policies report non-compliant resources across $assignmentsWithNC assignments ($totalNC unique resources). Assignment-level compliance rate: <strong>${ncCompliancePct}%</strong>.</p>
-    <p style="margin-top:6px;font-size:0.8rem;">$ncSeverityIcon <strong>Severity:</strong> $ncSeverity &mdash; $(if ($denyCount -gt 0) { "$denyCount Deny policies are active, so new violations are being blocked for those rules." } else { 'No Deny policies are active &mdash; new non-compliant resources can still be deployed.' })</p>
-    $(if ($topNCTypes) { "<p style='margin-top:4px;font-size:0.8rem;'>&#x1F4E6; <strong>Most affected resource types:</strong> $topNCTypes</p>" })
-    $(if ($topNCPolicies) { "<p style='margin-top:4px;font-size:0.8rem;'>&#x1F4CB; <strong>Top violating policies:</strong> $topNCPolicies</p>" })
-    <p style="margin-top:6px;font-size:0.8rem;color:var(--text-dim);"><em>Recommendation:</em> Investigate the top offending resource types and policies below. Consider creating remediation tasks for resources that can be auto-fixed (DINE/Modify policies) or plan manual fixes.</p>
-    <p style="margin-top:6px;"><a href="#details-nc-resources" onclick="navigateTo('sec-engineering','details-nc-resources'); return false;" style="color:#5bc0de;text-decoration:underline;cursor:pointer;">View by resource &rarr;</a> &nbsp;|&nbsp; <a href="#details-nc-policies" onclick="navigateTo('sec-engineering','details-nc-policies'); return false;" style="color:#5bc0de;text-decoration:underline;cursor:pointer;">View by policy &rarr;</a></p>
-</div></div>
-"@
-    }
-    if ($scopesNoDeny.Count -gt 0) {
-        $denyGapPct = if ($scopesWithPolicies.Count -gt 0) { [math]::Round(($scopesNoDeny.Count / $scopesWithPolicies.Count) * 100) } else { 0 }
-        $findingsList += @"
-<div class="callout callout-warning"><span class="callout-icon">&#x1F6E1;&#xFE0F;</span><div>
-    <strong>Missing Preventive Controls</strong>
-    <p>$($scopesNoDeny.Count) scope(s) have no Deny policies ($denyGapPct% of monitored scopes). Non-compliant deployments can proceed without guardrails at these locations.</p>
-    $(if ($scopesNoDenyNames) { "<p style='margin-top:4px;font-size:0.8rem;'>&#x1F4CD; <strong>Affected scopes:</strong> $scopesNoDenyNames</p>" })
-    <p style="margin-top:6px;font-size:0.8rem;">&#x2139;&#xFE0F; <strong>Why it matters:</strong> Without Deny policies, Azure will allow resources that violate your governance rules to be created. Audit policies will flag them <em>after the fact</em>, but won&rsquo;t prevent the violation.</p>
-    <p style="margin-top:4px;font-size:0.8rem;color:var(--text-dim);"><em>Recommendation:</em> Assign Deny policies for critical rules (e.g. allowed locations, allowed VM SKUs, required tags) at the Management Group or Subscription level.</p>
-    <p style="margin-top:6px;"><a href="#details-coverage" onclick="navigateTo('sec-architecture','details-coverage'); return false;" style="color:#5bc0de;text-decoration:underline;cursor:pointer;">View scope coverage &rarr;</a></p>
-</div></div>
-"@
+    $AssessmentFindings | Group-Object Category | Sort-Object Name | ForEach-Object {
+        $categoryFindings = @($_.Group)
+        $highestSeverity = @('Critical', 'High', 'Medium', 'Low', 'Info') | Where-Object { $_ -in $categoryFindings.Severity } | Select-Object -First 1
+        $calloutClass = if ($highestSeverity -eq 'Critical') { 'callout-critical' } elseif ($highestSeverity -in @('High', 'Medium')) { 'callout-warning' } else { 'callout-info' }
+        $icon = if ($highestSeverity -eq 'Critical') { '&#x26D4;' } elseif ($highestSeverity -in @('High', 'Medium')) { '&#x26A0;&#xFE0F;' } else { '&#x2139;&#xFE0F;' }
+        $findingIds = @($categoryFindings.Id) -join ', '
+        $titles = @($categoryFindings | Select-Object -First 3 | ForEach-Object { $_.Title }) -join '; '
+        $recommendations = @($categoryFindings.Recommendation | Select-Object -Unique -First 3) -join ' '
+        $verification = @($categoryFindings.VerificationSteps | Where-Object { $_ } | Select-Object -Unique -First 3) -join ' '
+        $sources = @($categoryFindings.Source | Select-Object -Unique) -join '; '
+        $confidence = @($categoryFindings.Confidence | Select-Object -Unique) -join ', '
+        $confidenceClass = if ($confidence -eq 'High') { 'status-pass' } elseif ($confidence -match 'Low') { 'status-fail' } else { 'status-warn' }
+        $sourceQuality = if ($sources -match 'heuristic|comparison') { 'Derived' } else { 'Observed' }
+        $sourceQualityClass = if ($sourceQuality -eq 'Observed') { 'status-pass' } else { 'status-warn' }
+        $qualityBadges = if ($_.Name -like 'CEP *') {
+            "<span class=`"badge $sourceQualityClass`">Evidence basis: $sourceQuality</span> <span class=`"badge $cepDataQualityClass`">Data quality: $cepDataQualityState</span>"
+        } else {
+            "<span class=`"badge $sourceQualityClass`">Data quality: $sourceQuality</span>"
+        }
+        $findingsList += "<div class=`"callout $calloutClass`"><span class=`"callout-icon`">$icon</span><div><strong>$($_.Name) ($($categoryFindings.Count))</strong><p><span class=`"badge $confidenceClass`">Confidence: $confidence</span> $qualityBadges</p><p><strong>Fact:</strong> $titles</p><p><strong>Interpretation:</strong> These observations indicate a potential $($_.Name.ToLowerInvariant()) condition; effective impact and applicability require validation.</p><p><strong>Verify:</strong> $verification</p><p><strong>Action:</strong> $recommendations</p><p style=`"margin-top:4px;font-size:0.8rem;color:var(--text-dim);`"><strong>Finding IDs:</strong> $findingIds &middot; <strong>Source:</strong> $sources</p></div></div>"
     }
     if ($tFail -gt 0 -or $tWarn -gt 0) {
-        $findingsList += "<div class=`"callout callout-warning`"><span class=`"callout-icon`">&#x1F4CB;</span><div><strong>CE+ Automated Checks Require Review: ${ceScore}% passed</strong><p>$tFail checks failing and $tWarn warnings. This percentage is a tool indicator, not an official certification threshold.</p><p style=`"margin-top:4px;font-size:0.8rem;color:var(--text-dim);`"><em>Recommendation:</em> Review failed checks and complete all manual tests with an authorised certification body.</p></div></div>"
+        $scoreSummary = if ($CEPAssessment.ScoreState -eq 'Measured' -and $null -ne $ceScore) { "${ceScore}% passed" } else { 'score N/A' }
+        $cepReviewRecommendation = if ($tFail -gt 0 -and $tWarn -gt 0) {
+            'Review failed and warning evidence and complete all manual tests with an authorised certification body.'
+        } elseif ($tFail -gt 0) {
+            'Review failed check evidence and complete all manual tests with an authorised certification body.'
+        } else {
+            'Review warning evidence and complete all manual tests with an authorised certification body.'
+        }
+        $findingsList += "<div class=`"callout callout-warning`"><span class=`"callout-icon`">&#x1F4CB;</span><div><strong>CE+ Automated Checks Require Review: $scoreSummary</strong><p>$tFail checks failing and $tWarn warnings. The score excludes prerequisites, warnings, skipped checks, and manual checks.</p><p style=`"margin-top:4px;font-size:0.8rem;color:var(--text-dim);`"><em>Recommendation:</em> $cepReviewRecommendation</p></div></div>"
     }
-    if ($disabledCount -gt 0) {
-        $findingsList += "<div class=`"callout callout-info`"><span class=`"callout-icon`">&#x2139;&#xFE0F;</span><div><strong>$disabledCount Disabled Policies Detected</strong><p>These assignments exist but are not being evaluated. They consume no quota but add management clutter.</p><p style=`"margin-top:4px;font-size:0.8rem;color:var(--text-dim);`"><em>Recommendation:</em> Review disabled assignments and remove any that are no longer needed. If they were disabled intentionally, document the reason.</p></div></div>"
-    }
-    if ($enforcedCount -gt 0 -and $auditOnlyCount -eq 0 -and $totalNC -eq 0) {
+    if ($hasEvaluatedCompliance -and $enforcedCount -gt 0 -and $auditOnlyCount -eq 0 -and $totalNC -eq 0) {
         $findingsList += "<div class=`"callout callout-success`"><span class=`"callout-icon`">&#x2705;</span><div><strong>Strong Policy Posture</strong><p>All $enforcedCount assignments are enforced with zero non-compliant resources. Your environment is fully compliant with all assigned policy rules.</p></div></div>"
-    } elseif ($enforcedCount -gt 0 -and $totalNC -eq 0) {
+    } elseif ($hasEvaluatedCompliance -and $enforcedCount -gt 0 -and $totalNC -eq 0) {
         $findingsList += "<div class=`"callout callout-success`"><span class=`"callout-icon`">&#x2705;</span><div><strong>Zero Non-Compliance</strong><p>No non-compliant resources detected across $totalAssignments assignments. $enforcedCount enforced, $auditOnlyCount in audit/DoNotEnforce mode.</p></div></div>"
     }
     if ($denyCount -gt 0 -and $scopesNoDeny.Count -eq 0) {
         $findingsList += "<div class=`"callout callout-success`"><span class=`"callout-icon`">&#x2705;</span><div><strong>Preventive Controls Active</strong><p>All $($scopesWithPolicies.Count) monitored scopes have at least one Deny policy. Non-compliant deployments will be blocked.</p></div></div>"
     }
-    if ($tAutomated -gt 0 -and $tFail -eq 0 -and $tWarn -eq 0) {
+    if ($CEPAssessment.ScoreState -eq 'Measured' -and $tAutomated -gt 0 -and $tFail -eq 0 -and $tWarn -eq 0) {
         $findingsList += "<div class=`"callout callout-success`"><span class=`"callout-icon`">&#x2705;</span><div><strong>CE+ Automated Checks: ${ceScore}% passed</strong><p>All $tAutomated automated checks passed. Manual testing and independent certification are still required.</p></div></div>"
     }
     $findingsHtml = $findingsList -join "`n"
+
+    $policyByAssignmentId = @{}
+    foreach ($policy in $PolicyResults) {
+        foreach ($assignmentKey in @($policy.'Assignment ID', $policy.'Assignment Name')) {
+            if ($assignmentKey) { $policyByAssignmentId[[string]$assignmentKey] = $policy }
+        }
+    }
+    $actionByFindingId = @{}
+    foreach ($action in $remediationItems) {
+        foreach ($findingId in @($action.FindingIds)) {
+            if ($findingId) { $actionByFindingId[[string]$findingId] = $action }
+        }
+    }
+    $executiveRiskCandidates = @($AssessmentFindings | ForEach-Object {
+        $finding = $_
+        $matchingPolicies = @($finding.AssignmentIds | ForEach-Object {
+            if ($policyByAssignmentId.ContainsKey([string]$_)) { $policyByAssignmentId[[string]$_] }
+        })
+        if ($finding.Category -eq 'Non-Compliance' -and $matchingPolicies.Count -gt 0) {
+            $policy = $matchingPolicies[0]
+            $displayName = [string]$policy.'Display Name'
+            $summaryName = $displayName -replace '(?i)\s+\(subscription:\s*[0-9a-f-]+\)$', ''
+            $subscriptionKey = if ($displayName -match '(?i)\(subscription:\s*([0-9a-f-]+)\)$') {
+                $Matches[1]
+            } elseif ([string]$policy.Scope -match '(?i)/subscriptions/([^/]+)') {
+                $Matches[1]
+            } elseif ($policy.'Scope Type' -eq 'Subscription') {
+                [string]$policy.'Scope Name'
+            } else {
+                ''
+            }
+            [PSCustomObject]@{
+                GroupKey = if ($subscriptionKey) { "Non-Compliance|$summaryName" } else { [string]$finding.Id }
+                Kind = if ($subscriptionKey) { 'Non-Compliance' } else { 'Finding' }
+                FindingId = [string]$finding.Id
+                Name = $summaryName
+                Severity = [string]$finding.Severity
+                Title = [string]$finding.Title
+                AffectedResources = if ($policy.'Non-Compliant Resources' -match '^\d+$') { [int]$policy.'Non-Compliant Resources' } else { 0 }
+                SubscriptionKey = $subscriptionKey
+            }
+        } else {
+            [PSCustomObject]@{
+                GroupKey = [string]$finding.Id
+                Kind = 'Finding'
+                FindingId = [string]$finding.Id
+                Name = ''
+                Severity = [string]$finding.Severity
+                Title = [string]$finding.Title
+                AffectedResources = 0
+                SubscriptionKey = ''
+            }
+        }
+    })
+    $executiveRiskSummaries = @($executiveRiskCandidates | Group-Object GroupKey | ForEach-Object {
+        $items = @($_.Group)
+        $severity = @($items | Sort-Object @{ Expression = { @('Critical', 'High', 'Medium', 'Low', 'Info').IndexOf([string]$_.Severity) } } | Select-Object -First 1).Severity
+        $phase = switch ($severity) { 'Critical' { '30-day' }; 'High' { '60-day' }; default { '90-day' } }
+        if ($items[0].Kind -eq 'Non-Compliance') {
+            $subscriptionCount = @($items.SubscriptionKey | Where-Object { $_ } | Select-Object -Unique).Count
+            $affectedResources = ($items.AffectedResources | Measure-Object -Sum).Sum
+            $subscriptionLabel = if ($subscriptionCount -eq 1) { 'subscription' } else { 'subscriptions' }
+            $title = "$($items[0].Name) &middot; $subscriptionCount $subscriptionLabel &middot; $affectedResources affected resources"
+            $actionText = "Prioritise remediation for '$($items[0].Name)' across $subscriptionCount $subscriptionLabel ($affectedResources affected resources)."
+            [PSCustomObject]@{ Severity = $severity; Phase = $phase; Title = $title; Action = $actionText }
+        } else {
+            $findingAction = $actionByFindingId[[string]$items[0].FindingId]
+            $actionText = if ($findingAction) { [string]$findingAction.Action } else { "Review and assign ownership for '$($items[0].Title)'." }
+            [PSCustomObject]@{ Severity = $severity; Phase = $phase; Title = $items[0].Title; Action = $actionText }
+        }
+    })
+    $executiveRiskItems = @($executiveRiskSummaries |
+        Sort-Object @{ Expression = { @('Critical', 'High', 'Medium', 'Low', 'Info').IndexOf([string]$_.Severity) } }, Title |
+        Select-Object -First 5 | ForEach-Object {
+            $severityClass = switch ($_.Severity) { 'Critical' { 'status-fail' }; 'High' { 'status-fail' }; 'Medium' { 'status-warn' }; default { 'status-skip' } }
+            $safeTitle = [System.Net.WebUtility]::HtmlEncode([string]$_.Title) -replace '&amp;middot;', '&middot;'
+            "<li><span class=`"badge $severityClass`">$($_.Severity)</span><span>$safeTitle</span></li>"
+        })
+    $executiveRisksHtml = if ($executiveRiskItems.Count -gt 0) { $executiveRiskItems -join "`n" } else { '<li class="text-dim">No material deterministic findings were identified.</li>' }
+
+    $executiveActionItems = @($executiveRiskSummaries |
+        Sort-Object @{ Expression = { @('Critical', 'High', 'Medium', 'Low', 'Info').IndexOf([string]$_.Severity) } }, Title |
+        Select-Object -First 5 | ForEach-Object {
+            $safeAction = [System.Net.WebUtility]::HtmlEncode([string]$_.Action)
+            "<li><strong>$($_.Phase)</strong><span>$safeAction</span></li>"
+        })
+    $executiveActionsHtml = if ($executiveActionItems.Count -gt 0) { $executiveActionItems -join "`n" } else { '<li class="text-dim">No deterministic actions were generated.</li>' }
+    $engineerActionItems = @($remediationItems | Select-Object -First 5 | ForEach-Object {
+        $safeAction = [System.Net.WebUtility]::HtmlEncode([string]$_.Action)
+        "<li><strong>$($_.Phase)</strong><span>$safeAction</span></li>"
+    })
+    $engineerActionsHtml = if ($engineerActionItems.Count -gt 0) { $engineerActionItems -join "`n" } else { '<li class="text-dim">No deterministic actions were generated.</li>' }
+
+    $affectedSubscriptionCount = @($NCExportData | ForEach-Object { $_.'Subscription ID' } | Where-Object { $_ } | Select-Object -Unique).Count
+    $affectedResourceTypeCount = @($NCExportData | ForEach-Object { $_.'Resource Type' } | Where-Object { $_ } | Select-Object -Unique).Count
+    $missingRemediationIdentityCount = @($PolicyResults | Where-Object {
+        $_.'Is Remediating' -and (-not $_.'Remediation Evidence' -or -not $_.'Remediation Evidence'.PrincipalId)
+    }).Count
+    $managementGroupCount = @($PolicyResults | Where-Object { $_.'Scope Type' -eq 'Management Group' } | ForEach-Object { $_.'Scope Name' } | Where-Object { $_ } | Select-Object -Unique).Count
+    $subscriptionScopeCount = @($PolicyResults | Where-Object { $_.'Scope Type' -eq 'Subscription' } | ForEach-Object { $_.'Scope Name' } | Where-Object { $_ } | Select-Object -Unique).Count
+    $highRiskInitiativeAssignmentCount = @($PolicyResults | Where-Object { $_.'Policy Type' -match 'Initiative' -and $_.'Risk Level' -eq 'High' }).Count
+    $criticalFindingCount = @($AssessmentFindings | Where-Object { $_.Severity -eq 'Critical' }).Count
+    $executiveOutcome = if (-not $hasEvaluatedCompliance) {
+        if ($assessmentState -eq 'NotEvaluated') { 'Assessment incomplete' } else { 'Decision blocked' }
+    } elseif ($assessmentState -eq 'EvaluatedNonCompliant' -or $totalNC -gt 0 -or $criticalFindingCount -gt 0) {
+        'Action required'
+    } else {
+        'No material issues observed'
+    }
+    $executiveOutcomeClass = if (-not $hasEvaluatedCompliance) {
+        'card-amber'
+    } elseif ($assessmentState -eq 'EvaluatedNonCompliant' -or $totalNC -gt 0 -or $criticalFindingCount -gt 0) {
+        'card-red'
+    } else {
+        'card-green'
+    }
+    $evidenceStatus = if ($hasEvaluatedCompliance -and $failedQueryCount -eq 0) {
+        'Evaluated'
+    } elseif ($hasEvaluatedCompliance) {
+        'Partial'
+    } elseif ($assessmentState -eq 'NotEvaluated') {
+        'Not evaluated'
+    } else {
+        'Unavailable'
+    }
+    $topInitiativesSummary = @($PolicyResults | Where-Object { $_.'Policy Type' -match 'Initiative' } |
+        Sort-Object { if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 } } -Descending |
+        Select-Object -First 3 | ForEach-Object { [System.Net.WebUtility]::HtmlEncode([string]$_.'Display Name') }) -join '; '
+    $topCategoriesSummary = @($PolicyResults | Group-Object Category | Sort-Object Count -Descending | Select-Object -First 3 |
+        ForEach-Object { "$([System.Net.WebUtility]::HtmlEncode([string]$_.Name)) ($($_.Count))" }) -join '; '
+    $topResourceTypesSummary = if ($topNCTypes) { [System.Net.WebUtility]::HtmlEncode($topNCTypes) } else { 'No affected resource types returned' }
+    $topFailingPoliciesSummary = if ($topNCPolicies) { [System.Net.WebUtility]::HtmlEncode($topNCPolicies) } else { 'No failing policies returned' }
 
     # ── Architecture insights ──
     $antiPatternItems = @()
 
     # AP-1: Disabled policies
     if ($disabledCount -gt 0) {
-        $disabledPolicies = @($PolicyResults | Where-Object { $_.'Effect Type' -eq 'Disabled' })
+        $disabledPolicies = @($PolicyResults | Where-Object { $_.'Is Disabled' })
         $disabledNames = ($disabledPolicies | ForEach-Object { $_.'Display Name' }) -join '</li><li>'
         $antiPatternItems += @"
 <div class="ap-item" style="margin-bottom:12px;border-left:3px solid var(--amber);padding:6px 12px;">
@@ -3974,7 +4450,7 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
 "@
     }
 
-    # AP-2: High-security policies in audit-only mode
+    # AP-2: High-security policies with enforcement disabled
     if ($highSecEnforceIssues.Count -gt 0) {
         $hsNames = ($highSecEnforceIssues | ForEach-Object {
             $eff = $_.'Effect Type'
@@ -3983,13 +4459,14 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
         $antiPatternItems += @"
 <div class="ap-item" style="margin-bottom:12px;border-left:3px solid var(--red);padding:6px 12px;">
     <details>
-        <summary style="cursor:pointer;font-weight:600;font-size:0.88rem;color:var(--red);">&#x1F6A8; $($highSecEnforceIssues.Count) high-security $(if ($highSecEnforceIssues.Count -eq 1) {'policy'} else {'policies'}) in audit-only mode</summary>
+        <summary style="cursor:pointer;font-weight:600;font-size:0.88rem;color:var(--red);">&#x1F6A8; $($highSecEnforceIssues.Count) high-security $(if ($highSecEnforceIssues.Count -eq 1) {'policy'} else {'policies'}) with enforcement disabled</summary>
         <div style="padding:8px 0;font-size:0.82rem;">
-            <p><strong>What this means:</strong> These policy assignments have a high Security Impact score but their enforcement mode is set to <code>DoNotEnforce</code>. Azure evaluates resources against them and reports compliance status, but <strong>does NOT block</strong> non-compliant deployments.</p>
-            <p><strong>Why it matters:</strong> This is the most critical anti-pattern. A Deny policy that isn't enforced provides zero preventive protection &mdash; it's a guardrail that's been switched off. Non-compliant resources are created freely and detected only after the fact.</p>
+            <p><strong>Fact:</strong> These policy assignments have a high Security Impact score and their enforcement mode is <code>DoNotEnforce</code>; configured effects are not applied.</p>
+            <p><strong>Interpretation:</strong> Preventive or remediation value may be absent, depending on each configured effect and effective scope.</p>
             <p style="margin-top:6px;"><strong>Affected policies:</strong></p>
             <ul style="margin:4px 0 0 16px;font-size:0.8rem;">$hsNames</ul>
-            <p style="margin-top:8px;"><strong>Recommended action:</strong> Change <code>enforcementMode</code> from <code>DoNotEnforce</code> to <code>Default</code> for each of these assignments. If blocking immediately is too disruptive, create a rollout plan: test in a dev subscription first, then enable in production.</p>
+            <p><strong>Verify:</strong> Confirm the intended effect, exclusions, inherited assignments, and workload impact in a controlled scope.</p>
+            <p style="margin-top:8px;"><strong>Action:</strong> Where validation supports enforcement, change <code>enforcementMode</code> from <code>DoNotEnforce</code> to <code>Default</code> through a staged rollout.</p>
             <p style="margin-top:6px;font-size:0.75rem;color:var(--text-dim);">&#x1F4DA; <strong>Reference:</strong> <a href="https://learn.microsoft.com/en-us/azure/governance/policy/concepts/assignment-structure#enforcement-mode" target="_blank" style="color:var(--accent);">Azure Policy enforcement mode</a> | <a href="https://learn.microsoft.com/en-us/azure/governance/policy/how-to/policy-safe-deployment-practices" target="_blank" style="color:var(--accent);">Safe deployment practices for Azure Policy</a></p>
         </div>
     </details>
@@ -4020,7 +4497,7 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
 "@
     }
 
-    # AP-4: Scopes lacking auto-remediation
+    # AP-4: Scopes without assigned DINE/Modify effects
     if ($scopesNoDINE.Count -gt 0 -and $scopesWithPolicies.Count -gt 0) {
         $dineGapRatio = "$($scopesNoDINE.Count) of $($scopesWithPolicies.Count)"
         $noDINEList = ($scopesNoDINE | Sort-Object ScopeType, ScopeName | ForEach-Object {
@@ -4029,10 +4506,10 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
         $antiPatternItems += @"
 <div class="ap-item" style="margin-bottom:12px;border-left:3px solid var(--amber);padding:6px 12px;">
     <details>
-        <summary style="cursor:pointer;font-weight:600;font-size:0.88rem;color:var(--amber);">&#x1F527; $dineGapRatio scopes lack auto-remediation</summary>
+        <summary style="cursor:pointer;font-weight:600;font-size:0.88rem;color:var(--amber);">&#x1F527; $dineGapRatio scopes have no assigned DINE/Modify effect</summary>
         <div style="padding:8px 0;font-size:0.82rem;">
             <p><strong>What this means:</strong> These scopes have no <code>DeployIfNotExists</code> (DINE) or <code>Modify</code> policies. When configurations drift or are deployed without required components (e.g. missing diagnostic settings, missing backup), they must be fixed manually.</p>
-            <p><strong>Why it matters:</strong> Without auto-remediation, compliance gaps require human intervention: someone has to detect the issue, investigate, and manually deploy the fix. This is slow, error-prone, and doesn't scale. DINE/Modify policies close this gap by automatically deploying or correcting configurations.</p>
+            <p><strong>Why it matters:</strong> Without an assigned DINE/Modify effect, applicable gaps may require manual correction. Assignment presence alone does not establish remediation: task state, identity, roles, scope controls, and policy evaluation must also be verified.</p>
             <p style="margin-top:6px;"><strong>Affected scopes:</strong></p>
             <ul style="margin:4px 0 0 16px;font-size:0.8rem;">$noDINEList</ul>
             <p style="margin-top:8px;"><strong>Recommended action:</strong> Assign DINE/Modify policies for: diagnostic settings (send logs to Log Analytics), backup configuration, encryption at rest, network watcher, and tagging. Azure has many built-in DINE policies &mdash; start with <em>Configure diagnostic settings</em> and <em>Configure backup on VMs</em>.</p>
@@ -4094,6 +4571,24 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
     $prevHealth = if ($preventivePct -ge 35 -and $preventivePct -le 45) { 'green' } elseif ($preventivePct -ge 25) { 'amber' } else { 'red' }
     $detHealth  = if ($detectivePct -ge 30 -and $detectivePct -le 40) { 'green' } elseif ($detectivePct -le 55) { 'amber' } else { 'red' }
     $remHealth  = if ($remediativePct -ge 15 -and $remediativePct -le 25) { 'green' } elseif ($remediativePct -ge 10) { 'amber' } else { 'red' }
+    $controlBalanceTakeaways = [System.Collections.Generic.List[string]]::new()
+    if ($detectivePct -gt 55) {
+        $controlBalanceTakeaways.Add('<li><strong>Detection-heavy</strong> (Audit &gt;55%) &mdash; The measured effect distribution relies heavily on detective controls. Verify applicability before changing critical Audit effects to Deny.</li>')
+    }
+    if ($preventivePct -lt 25) {
+        $controlBalanceTakeaways.Add('<li><strong>Low prevention</strong> (&lt;25%) &mdash; The measured distribution contains few preventive effects. Verify inherited controls and applicability before adding Deny effects.</li>')
+    }
+    if ($remediativePct -lt 15) {
+        $controlBalanceTakeaways.Add('<li><strong>Low remediation</strong> (&lt;15%) &mdash; The measured distribution contains few DINE/Modify effects. Verify which configurations are suitable for automated remediation.</li>')
+    }
+    if ($disabledCount -gt 0) {
+        $controlBalanceTakeaways.Add('<li><strong>Disabled policies present</strong> &mdash; Entirely disabled assignments are not evaluated and require an ownership review.</li>')
+    }
+    $controlBalanceTakeawaysHtml = if ($controlBalanceTakeaways.Count -gt 0) {
+        "<p><strong>Threshold findings:</strong></p><ul style='margin:4px 0 0 16px;padding:0;'>$($controlBalanceTakeaways -join '')</ul>"
+    } else {
+        '<p class="text-dim">No control-balance threshold findings were triggered.</p>'
+    }
     $overallBalance = if ($prevHealth -eq 'green' -and $detHealth -eq 'green' -and $remHealth -eq 'green') { 'Well Balanced' 
     } elseif ($prevHealth -eq 'red' -or $detHealth -eq 'red' -or $remHealth -eq 'red') { 'Imbalanced' 
     } else { 'Moderate' }
@@ -4101,10 +4596,19 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
 
     # ── Framework mapping ──
     $frameworkRows = ''
-    if ($CEPTestResults.Count -gt 0) {
-        $ceStatus = if ($tFail -eq 0 -and $tWarn -eq 0) { "<span class='badge status-pass'>Automated checks passed</span>" } elseif ($tFail -eq 0) { "<span class='badge status-warn'>Review required</span>" } else { "<span class='badge status-fail'>Checks failed</span>" }
-        $cePassRate = if (($tPass + $tFail) -gt 0) { [math]::Round(($tPass / ($tPass + $tFail)) * 100) } else { 0 }
-        $frameworkRows += "<tr><td><strong>&#x1F6E1;&#xFE0F; Cyber Essentials Plus</strong> <span class='experimental-tag'>Experimental</span><br><span class='text-dim' style='font-size:0.75rem;'>UK NCSC certification for cyber security hygiene. This mapping is experimental and not an official certification assessment.</span></td><td>$ceStatus</td><td><strong>${ceScore}%</strong><br><span class='text-dim'>tool indicator</span></td><td>$tPass passed, $tFail failed, $tWarn warnings, $tManual manual checks (automated pass rate: ${cePassRate}%). Independent assessment by an authorised certification body remains required.</td></tr>`n"
+    if ($CEPAssessment.Requested) {
+        $ceStatus = switch ($CEPAssessment.State) {
+            'PrerequisiteUnavailable' { "<span class='badge status-ne'>Prerequisite unavailable</span>" }
+            'EvaluationFailed' { "<span class='badge status-fail'>Evaluation failed</span>" }
+            'PartiallyEvaluated' { "<span class='badge status-warn'>Partially evaluated</span>" }
+            default {
+                if ($tFail -gt 0) { "<span class='badge status-fail'>Checks failed</span>" }
+                elseif ($tWarn -gt 0) { "<span class='badge status-warn'>Review required</span>" }
+                else { "<span class='badge status-pass'>Automated checks passed</span>" }
+            }
+        }
+        $ceScoreText = if ($CEPAssessment.ScoreState -eq 'Measured' -and $null -ne $ceScore) { "${ceScore}%" } else { 'N/A' }
+        $frameworkRows += "<tr><td><strong>&#x1F6E1;&#xFE0F; Cyber Essentials Plus</strong> <span class='experimental-tag'>Experimental</span><br><span class='text-dim' style='font-size:0.75rem;'>UK NCSC certification for cyber security hygiene. This mapping is experimental and not an official certification assessment.</span></td><td>$ceStatus</td><td><strong>$ceScoreText</strong><br><span class='text-dim'>$($CEPAssessment.ScoreState)</span></td><td>$tPass passed, $tFail failed, $tWarn warnings, $tManual manual checks. Assessment state: $($CEPAssessment.State). Independent assessment by an authorised certification body remains required.</td></tr>`n"
     }
     $regPolicies = @($PolicyResults | Where-Object { $_.'Policy Type' -eq 'Initiative (Regulatory)' })
     # Track assigned regulatory initiative names to avoid duplicating them as "Inferred"
@@ -4122,8 +4626,8 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
             $regTotal = if ($_.'Total Resources' -match '^\d+$') { [int]$_.'Total Resources' } else { 0 }
             $regScope = $_.'Scope Name'
             $regEnforce = $_.'Enforcement Mode'
-            $regStatusBadge = if ($regEnforce -eq 'DoNotEnforce') { "<span class='badge status-warn'>Audit Only</span>" } elseif ($regNC -gt 0) { "<span class='badge status-fail'>Non-Compliant</span>" } else { "<span class='badge status-pass'>Compliant</span>" }
-            $regNCText = if ($regNC -gt 0) { "<span class='nc-bad'>$regNC non-compliant</span> resources" } else { '<span style="color:var(--green)">All resources compliant</span>' }
+            $regStatusBadge = if ($regTotal -le 0) { "<span class='badge status-warn'>Not evaluated</span>" } elseif ($regNC -gt 0) { "<span class='badge status-fail'>Non-Compliant</span>" } else { "<span class='badge status-pass'>Compliant</span>" }
+            $regNCText = if ($regTotal -le 0) { '<span class="text-dim">No policy state evaluations available</span>' } elseif ($regNC -gt 0) { "<span class='nc-bad'>$regNC non-compliant</span> resources" } else { '<span style="color:var(--green)">All evaluated resources compliant</span>' }
             # Calculate compliance score from total/NC resources
             $regScoreText = 'N/A'
             if ($regTotal -gt 0) {
@@ -4183,6 +4687,66 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
         $frameworkRows += Add-UnmeasuredFrameworkRow -Icon '&#x1F30D;' -Name 'ISO/IEC 27001' -Description 'International standard for information security management' -Pattern 'ISO.?IEC.*27001|ISO.?27001'
     }
 
+    $executiveComplianceResults = [System.Collections.Generic.List[object]]::new()
+    if ($ALZData -and [int]$ALZData.TotalRecommended -gt 0) {
+        $alzExecutiveClass = if ([decimal]$ALZData.CoveragePercent -ge 75) { 'status-pass' } elseif ([decimal]$ALZData.CoveragePercent -ge 50) { 'status-warn' } else { 'status-fail' }
+        $executiveComplianceResults.Add([PSCustomObject]@{
+            Name = 'Azure Landing Zone'
+            Status = 'Coverage measured'
+            StatusClass = $alzExecutiveClass
+            Result = "$($ALZData.CoveragePercent)% detected"
+            Detail = "$($ALZData.EnforcedCoveragePercent)% enforced; $($ALZData.TotalMissing) applicable gaps across $($ALZData.TotalRecommended) assessed assets. Inventory coverage, not a compliance score."
+            Order = 0
+        })
+    }
+    if ($CEPAssessment.ScoreState -eq 'Measured' -and $null -ne $ceScore) {
+        $cepExecutiveStatus = if ($tFail -gt 0) { 'Checks failed' } elseif ($tWarn -gt 0) { 'Review required' } else { 'Automated checks passed' }
+        $cepExecutiveClass = if ($tFail -gt 0) { 'status-fail' } elseif ($tWarn -gt 0) { 'status-warn' } else { 'status-pass' }
+        $executiveComplianceResults.Add([PSCustomObject]@{
+            Name = 'Cyber Essentials Plus'
+            Status = $cepExecutiveStatus
+            StatusClass = $cepExecutiveClass
+            Result = "${ceScore}% tool indicator"
+            Detail = "$tPass passed, $tFail failed, $tWarn warnings, and $tManual manual checks. Independent certification remains required."
+            Order = 1
+        })
+    }
+
+    $measuredFrameworkAssignments = @($allInitiatives | Where-Object {
+        $_.'Policy Type' -eq 'Initiative (Regulatory)' -or
+        $_.'Display Name' -match 'Microsoft.*Cloud Security Benchmark|Azure Security Benchmark|CIS.*Azure|CIS.*Foundations|NIST.*800-53|800-53.*NIST|ISO.?IEC.*27001|ISO.?27001'
+    })
+    @($measuredFrameworkAssignments | Group-Object 'Display Name' | Sort-Object Name) | ForEach-Object {
+        $evaluatedAssignments = @($_.Group | Where-Object { ($_.'Total Resources' -match '^\d+$') -and [int]$_.'Total Resources' -gt 0 })
+        if ($evaluatedAssignments.Count -eq 0) { return }
+
+        $initiativeTotal = ($evaluatedAssignments | ForEach-Object { [int]$_.'Total Resources' } | Measure-Object -Sum).Sum
+        $initiativeNC = ($evaluatedAssignments | ForEach-Object { if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 } } | Measure-Object -Sum).Sum
+        $initiativeScore = [math]::Round((($initiativeTotal - $initiativeNC) / $initiativeTotal) * 100, 1)
+        $initiativeStatus = if ($initiativeNC -gt 0) { 'Action required' } else { 'Compliant' }
+        $initiativeClass = if ($initiativeNC -gt 0) { 'status-fail' } else { 'status-pass' }
+        $executiveComplianceResults.Add([PSCustomObject]@{
+            Name = [string]$_.Name
+            Status = $initiativeStatus
+            StatusClass = $initiativeClass
+            Result = "${initiativeScore}%"
+            Detail = "$initiativeNC non-compliant out of $initiativeTotal policy evaluation records across $($evaluatedAssignments.Count) assignment(s)."
+            Order = 2
+        })
+    }
+
+    $executiveComplianceItemsHtml = if ($executiveComplianceResults.Count -gt 0) {
+        @($executiveComplianceResults | Sort-Object Order, Name | ForEach-Object {
+            $safeFrameworkName = [System.Web.HttpUtility]::HtmlEncode([string]$_.Name)
+            $safeFrameworkStatus = [System.Web.HttpUtility]::HtmlEncode([string]$_.Status)
+            $safeFrameworkResult = [System.Web.HttpUtility]::HtmlEncode([string]$_.Result)
+            $safeFrameworkDetail = [System.Web.HttpUtility]::HtmlEncode([string]$_.Detail)
+            "<div class=`"executive-compliance-item`"><div class=`"executive-compliance-heading`"><strong>$safeFrameworkName</strong><span class=`"badge $($_.StatusClass)`">$safeFrameworkStatus</span></div><div class=`"executive-compliance-result`">$safeFrameworkResult</div><p>$safeFrameworkDetail</p></div>"
+        }) -join "`n"
+    } else {
+        '<p class="executive-compliance-empty">No assigned standards or Landing Zone assets produced a measured result in this assessment.</p>'
+    }
+
     # ── Overall Posture Rating ──
     $overallRating = if ($highRiskCount -eq 0 -and $totalNC -eq 0 -and $enforcedCount -gt 0 -and $auditOnlyCount -eq 0) { 'Excellent' }
                      elseif ($highRiskCount -le 2 -and $totalNC -le 10 -and $highSecEnforceIssues.Count -eq 0) { 'Good' }
@@ -4190,6 +4754,9 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
                      else { 'At Risk' }
     $ratingClass = switch ($overallRating) { 'Excellent' { 'rating-excellent' }; 'Good' { 'rating-good' }; 'Needs Improvement' { 'rating-warn' }; default { 'rating-risk' } }
     $ratingIcon = switch ($overallRating) { 'Excellent' { '&#x2705;' }; 'Good' { '&#x1F7E2;' }; 'Needs Improvement' { '&#x1F7E0;' }; default { '&#x1F534;' } }
+    $highRiskAssignmentNoun = if ($highRiskCount -eq 1) { 'assignment' } else { 'assignments' }
+    $affectedResourceNoun = if ($totalNC -eq 1) { 'resource' } else { 'resources' }
+    $overallRatingBasis = "$highRiskCount high-risk $highRiskAssignmentNoun and $totalNC unique affected $affectedResourceNoun"
 
     # ═══════════════════════════════════════════════════════════════
     #  BUILD HTML DOCUMENT
@@ -4212,6 +4779,7 @@ $(if ($AIInsights.actions -and $AIInsights.actions.Count -gt 0) {
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }
+html, body { max-width: 100%; overflow-x: hidden; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; font-size: 14px; }
 
 /* ── Layout ── */
@@ -4219,11 +4787,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Ar
 section { margin-bottom: 36px; scroll-margin-top: 70px; }
 
 /* ── Header ── */
-header { background: linear-gradient(135deg, #1a1f2e 0%, #0d1117 100%); border-bottom: 2px solid var(--accent); padding: 28px 32px; margin-bottom: 0; border-radius: 8px 8px 0 0; }
-header h1 { font-size: 1.5rem; color: var(--accent); margin-bottom: 4px; }
-header .subtitle { font-size: 1rem; color: var(--text); margin-bottom: 8px; }
-header .meta { color: var(--text-dim); font-size: 0.82rem; display: flex; gap: 20px; flex-wrap: wrap; }
-.rating-badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 20px; font-weight: 600; font-size: 0.9rem; margin-left: auto; }
+header { background: linear-gradient(135deg, #1a1f2e 0%, #0d1117 100%); border-bottom: 2px solid var(--accent); padding: 14px 20px; margin-bottom: 0; border-radius: 8px 8px 0 0; }
+.header-main { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; }
+.header-copy { min-width: 0; }
+.header-title-row { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+header h1 { font-size: 1.3rem; line-height: 1.25; color: var(--accent); }
+header .subtitle { font-size: 0.82rem; line-height: 1.3; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+header .meta { color: var(--text-dim); font-size: 0.72rem; line-height: 1.3; display: flex; gap: 0; flex-wrap: nowrap; white-space: nowrap; overflow-x: auto; scrollbar-width: none; margin-top: 4px; }
+header .meta::-webkit-scrollbar { display: none; }
+header .meta span { flex: 0 0 auto; }
+header .meta span + span::before { content: '\00B7'; padding: 0 8px; color: var(--border); }
+.rating-badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 20px; font-weight: 600; font-size: 0.78rem; white-space: nowrap; }
 .rating-excellent { background: var(--green-bg); color: var(--green); }
 .rating-good { background: var(--green-bg); color: var(--green); }
 .rating-warn { background: var(--amber-bg); color: var(--amber); }
@@ -4231,9 +4805,50 @@ header .meta { color: var(--text-dim); font-size: 0.82rem; display: flex; gap: 2
 
 /* ── Navigation ── */
 nav { position: sticky; top: 0; z-index: 100; background: var(--surface); border: 1px solid var(--border); border-top: none; display: flex; gap: 0; overflow-x: auto; padding: 0; }
+nav { scrollbar-width: none; }
+nav::-webkit-scrollbar { display: none; }
 nav a { padding: 12px 20px; color: var(--text-dim); text-decoration: none; font-size: 0.82rem; white-space: nowrap; border-bottom: 2px solid transparent; transition: all 0.2s; font-weight: 500; }
 nav a:hover { color: var(--text); background: var(--accent-subtle); }
 nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+.report-page { display: none; margin: 20px 0 0; }
+.report-page.active { display: block; animation: page-enter 0.18s ease-out; }
+.page-lead { min-height: 0; }
+@keyframes page-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.page-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 14px; }
+.page-heading h2 { color: var(--accent); font-size: 1.35rem; }
+.page-heading p { color: var(--text-dim); max-width: 720px; font-size: 0.85rem; }
+.page-status { color: var(--text-dim); font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+.page-summary { min-height: 0; }
+.page-summary .summary-cards { margin-bottom: 14px; }
+.page-summary .card { padding: 10px 14px; min-width: 105px; }
+.page-summary .card-num { font-size: 1.45rem; }
+.page-summary .executive-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
+.page-summary .executive-kpis .card { min-width: 0; min-height: 86px; display: flex; flex-direction: column; justify-content: center; }
+.page-summary .executive-kpis .executive-outcome { font-size: 1.05rem; line-height: 1.25; }
+.page-summary .executive-kpis .executive-evidence { font-size: 1.15rem; }
+.decision-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.decision-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.compact-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.compact-panel h3 { color: var(--accent); font-size: 0.9rem; margin-bottom: 7px; }
+.compact-panel p { color: var(--text-dim); font-size: 0.8rem; }
+.consequence-negative { border-left: 3px solid var(--red); }
+.consequence-positive { border-left: 3px solid var(--green); }
+.executive-compliance { margin-bottom: 14px; }
+.executive-compliance > summary { color: var(--accent); }
+.executive-compliance > .details-content > p { margin-bottom: 10px; }
+.executive-compliance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 18px; }
+.executive-compliance-item { min-width: 0; padding: 10px 0; border-top: 1px solid var(--border); }
+.executive-compliance-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.executive-compliance-heading strong { color: var(--text); font-size: 0.82rem; line-height: 1.3; }
+.executive-compliance-heading .badge { flex: 0 0 auto; }
+.executive-compliance-result { margin-top: 5px; color: var(--accent); font-size: 1rem; font-weight: 700; }
+.executive-compliance-item p, .executive-compliance-empty { margin-top: 3px; color: var(--text-dim); font-size: 0.72rem; line-height: 1.35; }
+.executive-decisions { margin-top: 14px; }
+.executive-decision-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.compact-list { list-style: none; display: grid; gap: 6px; }
+.compact-list li { display: flex; align-items: flex-start; gap: 8px; color: var(--text-dim); font-size: 0.79rem; line-height: 1.35; }
+.compact-list li strong { color: var(--text); min-width: 48px; }
+.report-page > .section-header, .report-page > details.section-disclosure > summary .section-num { display: none; }
 
 /* ── Section Headers ── */
 .section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
@@ -4306,6 +4921,7 @@ tr:hover { background: var(--accent-subtle); }
 /* ── Grids ── */
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+.grid-2 > *, .grid-3 > *, .roadmap > * { min-width: 0; }
 .insight-box { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
 .insight-box h4 { color: var(--accent); font-size: 0.9rem; margin-bottom: 8px; }
 .insight-box p, .insight-box ul { font-size: 0.85rem; color: var(--text-dim); }
@@ -4318,6 +4934,19 @@ details > summary::before { content: '\25B6'; font-size: 0.7rem; color: var(--te
 details[open] > summary::before { transform: rotate(90deg); }
 details > summary:hover { background: var(--accent-subtle); }
 details > .details-content { padding: 0 18px 18px; }
+.report-disclosure > summary { min-height: 52px; }
+.report-disclosure > summary .disclosure-meta { margin-left: auto; color: var(--text-dim); font-size: 0.75rem; font-weight: 400; text-align: right; }
+.report-disclosure[open] > summary { border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.report-disclosure.depth-3 { background: var(--bg); border-style: dashed; }
+.report-disclosure.depth-3 > summary { color: var(--text-dim); }
+.section-disclosure { background: transparent; border: 0; border-radius: 0; margin: 0; }
+.section-disclosure > summary { padding: 0 0 10px; border-bottom: 1px solid var(--border); font-size: 1.2rem; color: var(--accent); }
+.section-disclosure > summary::before { margin-right: 4px; }
+.section-disclosure > summary:hover { background: transparent; color: var(--text); }
+.section-disclosure > summary .section-num { color: var(--text-dim); font-size: 0.85rem; font-weight: 400; }
+.section-disclosure > summary .disclosure-hint { margin-left: auto; color: var(--text-dim); font-size: 0.75rem; font-weight: 400; }
+.section-disclosure[open] > summary { margin-bottom: 16px; }
+.section-content { padding-top: 0; }
 
 /* ── Filters ── */
 .filter-bar { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
@@ -4394,8 +5023,6 @@ details > .details-content { padding: 0 18px 18px; }
 .guide-content li { margin-bottom: 4px; }
 .guide-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 
-.section-sep { border: none; border-top: 2px solid var(--border); margin: 40px 0 36px; position: relative; }
-.section-sep::after { content: attr(data-label); position: absolute; top: -10px; left: 20px; background: var(--bg); padding: 0 12px; font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
 
 .glossary { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px 24px; margin-bottom: 24px; }
 .glossary h3 { color: var(--accent); font-size: 1rem; margin-bottom: 14px; }
@@ -4431,14 +5058,49 @@ details > .details-content { padding: 0 18px 18px; }
     .card { border: 1px solid #d0d7de; }
     .callout { break-inside: avoid; }
     .filter-bar { display: none; }
+    .report-page { display: block !important; min-height: 0; break-before: page; }
+    .report-page:first-of-type { break-before: auto; }
+    .page-detail { display: block; }
+    details > * { display: block !important; }
 }
 
 @media (max-width: 1024px) { .grid-2, .grid-3, .roadmap { grid-template-columns: 1fr; } }
 @media (max-width: 768px) {
+    .container { padding: 8px; }
+    header { padding: 9px 10px; }
+    .header-main { gap: 8px; }
+    .header-title-row { display: block; }
+    header h1 { font-size: 1.05rem; }
+    header .subtitle { display: none; }
+    header .meta { display: flex; font-size: 0.62rem; margin-top: 3px; }
+    header .meta span + span::before { padding: 0 5px; }
+    .rating-badge { padding: 4px 9px; font-size: 0.72rem; }
     .summary-cards { flex-direction: column; }
     .card { min-width: auto; }
     .filter-bar input { min-width: 100%; }
-    nav { flex-wrap: wrap; }
+    nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: hidden; }
+    nav a { padding: 7px 2px; font-size: 0.62rem; line-height: 1.15; white-space: normal; text-align: center; }
+    .page-summary .summary-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .page-summary .executive-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .page-summary .executive-kpis .card:first-child { grid-column: 1 / -1; }
+    .page-summary .card { padding: 7px 5px; min-width: 0; }
+    .page-summary .card-num { font-size: 1.05rem; }
+    .page-summary .card-label { font-size: 0.62rem; line-height: 1.2; }
+    .decision-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .page-summary .decision-grid { grid-template-columns: 1fr; }
+    .decision-grid.three { grid-template-columns: 1fr; }
+    .executive-compliance-grid { grid-template-columns: 1fr; }
+    .executive-decision-list { grid-template-columns: 1fr; }
+    .compact-panel { padding: 8px; }
+    .compact-panel h3 { font-size: 0.76rem; }
+    .compact-panel p, .compact-list li { font-size: 0.7rem; }
+    .compact-list { gap: 4px; }
+    .report-page { margin-top: 10px; }
+    .page-heading { align-items: center; margin-bottom: 8px; }
+    .page-heading h2 { font-size: 1rem; }
+    .page-heading p, .page-status { display: none; }
+    .section-disclosure > summary { flex-wrap: wrap; }
+    .section-disclosure > summary .disclosure-hint { width: 100%; margin-left: 20px; text-align: left; }
 }
 </style>
 </head>
@@ -4448,17 +5110,14 @@ details > .details-content { padding: 0 18px 18px; }
 <!-- ══════════════════════════════════════════════════════ -->
 <!--  HEADER                                               -->
 <!-- ══════════════════════════════════════════════════════ -->
-<div class="disclaimer-banner">
-    <span class="disclaimer-icon">&#x2139;&#xFE0F;</span>
-    <span><strong>Not an Official Microsoft Product.</strong> This project is made and maintained by Riccardo Pomato. It is a best-effort open-source tool designed to help Azure architects and engineers assess their policy posture. It is not affiliated with, endorsed by, or supported by Microsoft. The data and recommendations herein are provided &ldquo;as-is&rdquo; without warranty. Always validate findings against the <a href="https://portal.azure.com/#view/Microsoft_Azure_Policy/PolicyMenuBlade/~/Compliance" target="_blank">Azure Policy compliance dashboard</a> and official Microsoft documentation.</span>
-</div>
-
 <header>
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
-        <div>
-            <h1>&#x1F6E1;&#xFE0F; Azure Policy Assessment Report</h1>
-            <p class="subtitle">Comprehensive Policy, Security &amp; Compliance Analysis</p>
-            <div class="meta">
+    <div class="header-main">
+        <div class="header-copy">
+            <div class="header-title-row">
+                <h1>&#x1F6E1;&#xFE0F; Azure Policy Assessment Report</h1>
+                <p class="subtitle">Comprehensive Policy, Security &amp; Compliance Analysis</p>
+            </div>
+            <div class="meta" aria-label="Report metadata">
                 <span>Generated: $reportDate</span>
                 $(if ($TenantName) { "<span>Tenant: $TenantName</span>" })
                 $(if ($FilterLabel) { "<span>&#x1F50D; Filter: $FilterLabel</span>" } else { "<span>Scope: All (tenant-wide)</span>" })
@@ -4466,7 +5125,7 @@ details > .details-content { padding: 0 18px 18px; }
                 <span>$totalAssignments assignments analysed</span>
             </div>
         </div>
-        <div class="rating-badge $ratingClass">$ratingIcon $overallRating</div>
+        <div class="rating-badge $ratingClass" title="Tool risk indicator based on $overallRatingBasis; not an official compliance or certification rating">$ratingIcon $overallRating</div>
     </div>
 </header>
 
@@ -4474,38 +5133,133 @@ details > .details-content { padding: 0 18px 18px; }
 <!--  NAVIGATION                                           -->
 <!-- ══════════════════════════════════════════════════════ -->
 <nav id="main-nav">
-    <a href="#sec-executive" class="active" onclick="setActive(this)">Executive Summary</a>
-    <a href="#sec-engineering" onclick="setActive(this)">Engineering Report</a>
-    <a href="#sec-architecture" onclick="setActive(this)">Architecture Insights</a>
-    <a href="#sec-governance" onclick="setActive(this)">Governance &amp; Compliance</a>
-    <a href="#sec-security" onclick="setActive(this)">Security Posture</a>
-    <a href="#sec-alz" onclick="setActive(this)">Landing Zone</a>
-    <a href="#sec-cost" onclick="setActive(this)">Cost Insights</a>
-    <a href="#sec-recommendations" onclick="setActive(this)">Recommendations</a>
-$(if ($YAMLDeltaData) { '    <a href="#sec-yaml-delta" onclick="setActive(this)">Delta Assessment</a>' })
-$(if ($AIInsights) { '    <a href="#sec-ai-insights" onclick="setActive(this)">AI Insights</a>' })
+    <a href="#page-summary" class="active" data-page="page-summary">Summary</a>
+    <a href="#page-csa" data-page="page-csa">CSA / Architect</a>
+    <a href="#page-engineer" data-page="page-engineer">Engineer</a>
+    <a href="#page-evidence" data-page="page-evidence">Evidence</a>
+    <a href="#page-methodology" data-page="page-methodology">Methodology</a>
 </nav>
+
+<main id="report-pages">
+<section id="page-summary" class="report-page page-lead active" data-report-page data-page-group="page-summary">
+    <div class="page-heading"><div><h2>Executive Summary</h2><p>What is happening, why it matters, the expected effect of action or inaction, and the decisions leadership must make.</p></div><span class="page-status">Start here</span></div>
+    <div class="page-summary">
+        <div class="summary-cards executive-kpis">
+            <div class="card $executiveOutcomeClass"><div class="card-num executive-outcome">$executiveOutcome</div><div class="card-label">Assessment Outcome</div></div>
+            <div class="card $(if ($totalNC -gt 0) { 'card-red' } else { 'card-green' })"><div class="card-num">$(if ($hasEvaluatedCompliance) { $totalNC } else { 'N/A' })</div><div class="card-label">Affected Resources</div></div>
+            <div class="card $(if ($affectedSubscriptionCount -gt 0) { 'card-amber' } else { 'card-green' })"><div class="card-num">$(if ($hasEvaluatedCompliance) { $affectedSubscriptionCount } else { 'N/A' })</div><div class="card-label">Affected Subscriptions</div></div>
+            <div class="card $(if ($criticalFindingCount -gt 0) { 'card-red' } else { 'card-green' })"><div class="card-num">$criticalFindingCount</div><div class="card-label">Critical Findings</div></div>
+            <div class="card $(if ($failedQueryCount -eq 0 -and $hasEvaluatedCompliance) { 'card-green' } else { 'card-amber' })"><div class="card-num executive-evidence">$evidenceStatus</div><div class="card-label">Evidence Status</div></div>
+        </div>
+        <details class="report-disclosure depth-2 executive-compliance" id="details-executive-compliance">
+            <summary>Compliance &amp; Landing Zone Results <span class="disclosure-meta">$($executiveComplianceResults.Count) measured result$(if ($executiveComplianceResults.Count -ne 1) { 's' })</span></summary>
+            <div class="details-content">
+                <p>Only assigned standards and Landing Zone assets with measured evidence are included. Percentages use each result's stated evidence base and do not establish certification.</p>
+                <div class="executive-compliance-grid">$executiveComplianceItemsHtml</div>
+            </div>
+        </details>
+        <div class="decision-grid">
+            <div class="compact-panel"><h3>Priority Risks</h3><ul class="compact-list">$executiveRisksHtml</ul></div>
+            <div class="compact-panel"><h3>Priority Actions</h3><ul class="compact-list">$executiveActionsHtml</ul></div>
+        </div>
+        <div class="decision-grid three">
+            <div class="compact-panel"><h3>What Is Happening</h3>$(if ($hasEvaluatedCompliance) { "<p><strong>$totalNC</strong> resources are affected across <strong>$affectedSubscriptionCount</strong> subscriptions. The assessment produced <strong>$criticalFindingCount</strong> critical findings; <strong>$auditOnlyCount</strong> assignments do not apply their configured effects and <strong>$missingRemediationIdentityCount</strong> identity blockers can prevent automated correction.</p>" } else { '<p><strong>No reliable resource posture conclusion is available.</strong> Restore usable policy-state evidence before making a compliance decision.</p>' })</div>
+            <div class="compact-panel consequence-negative"><h3>If No Action Is Taken</h3>$(if ($hasEvaluatedCompliance) { '<p>Observed violations remain unresolved, controls that only detect continue to allow exposure, and identity blockers continue to delay automated correction. Regulatory and operational risk persists until findings are remediated or explicitly accepted.</p>' } else { '<p>No resource posture conclusion is available. Leadership remains unable to quantify exposure or prioritise remediation reliably until evidence collection is restored and the environment is evaluated.</p>' })</div>
+            <div class="compact-panel consequence-positive"><h3>If Action Is Taken</h3>$(if ($hasEvaluatedCompliance) { "<p>The prioritised plan targets the <strong>$totalNC</strong> observed affected resources, <strong>$auditOnlyCount</strong> enforcement gaps, and <strong>$missingRemediationIdentityCount</strong> identity blockers. A subsequent Azure Policy evaluation must confirm the actual reduction; action does not by itself establish compliance or certification.</p>" } else { '<p>Restore evidence collection and rerun the assessment first. The resulting baseline can then support prioritised remediation and measurable follow-up; no posture improvement is claimed before evaluation.</p>' })</div>
+        </div>
+        <div class="compact-panel executive-decisions"><h3>Leadership Decisions Required</h3><ul class="compact-list executive-decision-list"><li><strong>Own</strong><span>Assign accountable owners for $remCritical critical remediation actions.</span></li><li><strong>Fund</strong><span>Approve capacity and change windows for the 30/60/90-day plan.</span></li><li><strong>Accept</strong><span>Record explicit risk acceptance for deferred findings and exceptions.</span></li></ul></div>
+    </div>
+</section>
+
+<section id="page-csa" class="report-page page-lead" data-report-page data-page-group="page-csa">
+    <div class="page-heading"><div><h2>CSA / Architect</h2><p>Governance coverage, risk concentration, control architecture, and structural gaps.</p></div><span class="page-status">Architecture view</span></div>
+    <div class="page-summary">
+        <div class="summary-cards">
+            <div class="card card-blue"><div class="card-num">$managementGroupCount</div><div class="card-label">Management Groups</div></div>
+            <div class="card card-blue"><div class="card-num">$subscriptionScopeCount</div><div class="card-label">Subscription Scopes</div></div>
+            <div class="card $(if ($highRiskInitiativeAssignmentCount -gt 0) { 'card-red' } else { 'card-green' })"><div class="card-num">$highRiskInitiativeAssignmentCount</div><div class="card-label">High-Risk Initiative Assignments</div></div>
+            <div class="card $(if ($scopesNoDeny.Count -gt 0) { 'card-amber' } else { 'card-green' })"><div class="card-num">$($scopesNoDeny.Count)</div><div class="card-label">Scopes Without Preventive Controls</div></div>
+        </div>
+        <div class="decision-grid three">
+            <div class="compact-panel"><h3>Risk Concentration</h3><p><strong>Initiatives:</strong> $(if ($topInitiativesSummary) { $topInitiativesSummary } else { 'None returned' })</p><p><strong>Categories:</strong> $(if ($topCategoriesSummary) { $topCategoriesSummary } else { 'None returned' })</p><p><strong>Resource types:</strong> $topResourceTypesSummary</p></div>
+            <div class="compact-panel"><h3>Governance Gaps</h3><ul class="compact-list"><li><strong>$($scopesNoDeny.Count)</strong><span>scopes without preventive controls</span></li><li><strong>$auditOnlyCount</strong><span>assignments without enforcement</span></li><li><strong>$missingRemediationIdentityCount</strong><span>remediating assignments missing identity evidence</span></li></ul></div>
+            <div class="compact-panel"><h3>Control Architecture</h3><ul class="compact-list"><li><strong>$denyCount</strong><span>preventive controls</span></li><li><strong>$auditEffectCount</strong><span>detective controls</span></li><li><strong>$dineModifyCount</strong><span>remediating effects</span></li></ul><p>Behavior depends on effect: Deny blocks, Audit reports, and DINE/Modify can remediate.</p></div>
+        </div>
+    </div>
+</section>
+
+<section id="page-engineer" class="report-page page-lead" data-report-page data-page-group="page-engineer">
+    <div class="page-heading"><div><h2>Engineer</h2><p>Policy assignments, affected resources, prioritised remediation, blockers, permissions, and operational evidence.</p></div><span class="page-status">Action view</span></div>
+    <div class="page-summary">
+        <div class="summary-cards">
+            <div class="card card-blue"><div class="card-num">$ncPolicyCount</div><div class="card-label">Failing Policies</div></div>
+            <div class="card card-blue"><div class="card-num">$affectedResourceTypeCount</div><div class="card-label">Affected Resource Types</div></div>
+            <div class="card $(if ($missingRemediationIdentityCount -gt 0) { 'card-red' } else { 'card-green' })"><div class="card-num">$missingRemediationIdentityCount</div><div class="card-label">Identity Blockers</div></div>
+            <div class="card $(if ($highSecEnforceIssues.Count -gt 0) { 'card-red' } else { 'card-green' })"><div class="card-num">$($highSecEnforceIssues.Count)</div><div class="card-label">High-Security Enforcement Gaps</div></div>
+        </div>
+        <div class="decision-grid three">
+            <div class="compact-panel"><h3>Remediation Queue</h3><ul class="compact-list">$engineerActionsHtml</ul></div>
+            <div class="compact-panel"><h3>Affected Resource Types</h3><p>$topResourceTypesSummary</p><p><strong>$totalNC</strong> unique affected resources across <strong>$affectedSubscriptionCount</strong> subscriptions.</p></div>
+            <div class="compact-panel"><h3>Operational Findings</h3><p><strong>Top failing policies:</strong> $topFailingPoliciesSummary</p><p><strong>$($highSecEnforceIssues.Count)</strong> high-security enforcement gaps require review.</p></div>
+        </div>
+    </div>
+</section>
+
+<section id="page-evidence" class="report-page page-lead" data-report-page data-page-group="page-evidence">
+    <div class="page-heading"><div><h2>Evidence</h2><p>Assessment provenance and snapshot changes supporting the conclusions shown in the audience views.</p></div><span class="page-status">Evidence catalogue</span></div>
+    <div class="page-summary">
+        <div class="summary-cards">
+            <div class="card card-blue"><div class="card-num">$($AssessmentFindings.Count)</div><div class="card-label">Findings</div></div>
+            <div class="card card-blue"><div class="card-num">$dataQualityRecords</div><div class="card-label">Evidence Records</div></div>
+            <div class="card $(if ($successfulQueryCount -gt 0) { 'card-green' } else { 'card-gray' })"><div class="card-num">$successfulQueryCount</div><div class="card-label">Successful Sources</div></div>
+            <div class="card $(if ($failedQueryCount -gt 0) { 'card-red' } else { 'card-green' })"><div class="card-num">$failedQueryCount</div><div class="card-label">Failed Sources</div></div>
+        </div>
+        <div class="decision-grid">
+            <div class="compact-panel"><h3>Current-State Provenance</h3><p>Counts summarize the Azure records collected for this assessment. Assignment, resource, policy, and exemption details are available directly in Engineer.</p></div>
+            <div class="compact-panel"><h3>Change Evidence</h3><p>Snapshot delta appears only when a comparison YAML was supplied and remains isolated from the current-state operational inventory.</p></div>
+        </div>
+    </div>
+</section>
+
+<section id="page-methodology" class="report-page page-lead" data-report-page data-page-group="page-methodology">
+    <div class="page-heading"><div><h2>Methodology</h2><p>Confidence, sources, collection boundaries, limitations, and interpretation guidance.</p></div><span class="page-status">Reference view</span></div>
+    <div class="page-summary">
+        <div class="decision-grid three">
+            <div class="compact-panel"><h3>Confidence</h3><p>Deterministic findings retain source and confidence metadata. Current data quality: <strong>$dataQualityLabel</strong>.</p></div>
+            <div class="compact-panel"><h3>Data Sources</h3><p>Azure Resource Graph, Azure Policy metadata and states, remediation tasks, role assignments, exemptions, and explicitly enabled cost sources.</p></div>
+            <div class="compact-panel"><h3>Collection Method</h3><p>Point-in-time, read-only evidence collection at $dataQualityTimestamp. Fallback used: $(if ($dataQualityFallback) { 'yes' } else { 'no' }).</p></div>
+        </div>
+        <details class="report-disclosure depth-3 disclaimer-disclosure">
+            <summary>Methodology and limitations <span class="disclosure-meta">Best-effort tool, not an official Microsoft product</span></summary>
+            <div class="details-content disclaimer-banner">
+                <span class="disclaimer-icon">&#x2139;&#xFE0F;</span>
+                <span><strong>Not an Official Microsoft Product.</strong> This project is made and maintained by Riccardo Pomato. It is a best-effort open-source tool designed to help Azure architects and engineers assess their policy posture. It is not affiliated with, endorsed by, or supported by Microsoft. The data and recommendations herein are provided &ldquo;as-is&rdquo; without warranty. Always validate findings against the <a href="https://portal.azure.com/#view/Microsoft_Azure_Policy/PolicyMenuBlade/~/Compliance" target="_blank">Azure Policy compliance dashboard</a> and official Microsoft documentation.</span>
+            </div>
+        </details>
+    </div>
+</section>
 
 <!-- ══════════════════════════════════════════════════════ -->
 <!--  HOW TO READ THIS REPORT                              -->
 <!-- ══════════════════════════════════════════════════════ -->
-<details class="guide-panel">
+<details class="guide-panel report-page" data-report-page data-page-group="page-methodology">
     <summary>&#x1F4D6; How to Read This Report</summary>
     <div class="guide-content">
-        <p>This report analyses your Azure Policy assignments across all scopes and provides actionable insights organised into 7 sections. Use the navigation bar above to jump between sections.</p>
+        <p>This report analyses your Azure Policy assignments across all scopes and provides actionable insights organised into $totalSections sections: 7 core sections$(if ($hasALZSection -or $hasDeltaSection) { ' plus the optional sections listed below' }). Use the navigation bar above to jump between sections.</p>
 
         <div class="guide-columns">
             <div>
                 <h4>Report Sections</h4>
                 <ul>
-                    <li><strong>Executive Summary</strong> &mdash; High-level KPIs, key findings, and risk overview. Start here for a quick snapshot.</li>
-                    <li><strong>Engineering Report</strong> &mdash; Complete raw data: all policy assignments, non-compliant resources (by resource and by policy), and policy exemptions in searchable, sortable tables.</li>
-                    <li><strong>Architecture Insights</strong> &mdash; How your policies are structured: scope hierarchy, control type balance (with suggested ranges), coverage gaps, and expandable anti-pattern detection with references.</li>
+                    <li><strong>Summary</strong> &mdash; Executive conclusions only: high-level KPIs, aggregated priority risks and actions, business impact, and leadership decisions.</li>
+                    <li><strong>Engineering Report</strong> &mdash; Actionable inventory: prioritised findings, all policy assignments, non-compliant resources, exemptions, remediation evidence, and verification details.</li>
+                    <li><strong>Architecture Insights</strong> &mdash; Design analysis: scope placement and inheritance, control type balance, coverage gaps, policy structure, and architectural anti-patterns.</li>
                     <li><strong>Governance &amp; Compliance</strong> &mdash; Framework mapping (CE+, CIS, NIST), Cyber Essentials test results <span class="experimental-tag">Experimental</span>, and regulatory compliance.</li>
-                    <li><strong>Security Posture</strong> &mdash; Risk-rated view of all policies with multi-signal scoring methodology, enforcement effectiveness, and threat mitigation coverage.</li>
+                    <li><strong>Security Action Inventory</strong> &mdash; Risk-prioritised assignments, enforcement-gap records, and affected resource types for implementation and verification.</li>
+$(if ($hasALZSection) { '                    <li><strong>Landing Zone</strong> &mdash; Deterministic comparison with the selected Azure Landing Zones Library inventory.</li>' })
                     <li><strong>Cost Insights</strong> &mdash; Resource cost and operational overhead associated with policy assignments.</li>
                     <li><strong>Recommendations</strong> &mdash; Prioritised action plan with a 30-60-90 day roadmap.</li>
-$(if ($AIInsights) { '                    <li><strong>AI Executive Insights</strong> &mdash; AI-generated narrative summary with posture rating, top drivers, and prioritised actions. Powered by GitHub Copilot. <span class="experimental-tag">AI</span></li>' })
+$(if ($YAMLDeltaData) { '                    <li><strong>Delta Assessment</strong> &mdash; Changes detected against the supplied prior YAML assessment.</li>' })
                 </ul>
             </div>
             <div>
@@ -4524,7 +5278,7 @@ $(if ($AIInsights) { '                    <li><strong>AI Executive Insights</str
                 <ul>
                     <li><strong>NC</strong> = Non-Compliant (unique resources that violate a policy rule)</li>
                     <li><strong>Enforced (Default)</strong> = Assignment is actively enforced by Azure &mdash; the policy effect (Deny, Audit, DINE, etc.) is applied</li>
-                    <li><strong>DoNotEnforce</strong> = Enforcement mode disabled &mdash; Azure evaluates compliance but does NOT apply effects (no blocking, no remediation)</li>
+                    <li><strong>DoNotEnforce</strong> = Enforcement mode disabled &mdash; Azure evaluates compliance but does not apply configured effects automatically; separate manual remediation tasks may still exist</li>
                     <li><strong>Deny</strong> = Preventive control &mdash; blocks non-compliant deployments before they happen</li>
                     <li><strong>Audit / AuditIfNotExists</strong> = Detective control &mdash; flags non-compliance but allows the action to proceed</li>
                     <li><strong>DINE / Modify</strong> = Remediation control &mdash; auto-deploys or corrects configurations (DeployIfNotExists / Modify)</li>
@@ -4547,135 +5301,64 @@ $(if ($AIInsights) { '                    <li><strong>AI Executive Insights</str
 </details>
 
 <!-- ══════════════════════════════════════════════════════ -->
-<!--  1. EXECUTIVE SUMMARY                                 -->
+<!--  1. PRIORITISED FINDINGS                              -->
 <!-- ══════════════════════════════════════════════════════ -->
-<section id="sec-executive">
+<section id="sec-findings" class="report-page" data-report-page data-page-group="page-engineer">
     <div class="section-header">
-        <h2>Executive Summary</h2>
+        <h2>Prioritised Findings</h2>
         <span class="section-num">Section 1 of $totalSections</span>
     </div>
 
     <div class="section-intro">
-        <p><strong>Purpose:</strong> A high-level snapshot of your Azure Policy posture. Review the KPI cards below for at-a-glance numbers, then check the key findings for items requiring immediate attention.</p>
-        <p>Cards in <strong style="color:var(--red)">red</strong> indicate areas of concern. Cards in <strong style="color:var(--green)">green</strong> show healthy metrics.</p>
+        <p><strong>Purpose:</strong> Actionable deterministic findings and assignment-level evidence supporting the aggregated risks in Summary. Use this section to investigate why an item was raised, identify affected records, and verify the recommended action.</p>
     </div>
 
-    <div class="summary-cards">
-        <div class="card card-blue" title="Total number of policy and initiative assignments across all scopes"><div class="card-num">$totalAssignments</div><div class="card-label">Assignments <span class="col-info" data-tip="Total policy and initiative assignments found across all management groups, subscriptions, and resource groups" title="Total assignments">&#9432;</span></div></div>
-        <div class="card card-green" title="Number of single (standalone) policy assignments"><div class="card-num">$PolicyCount</div><div class="card-label">Policies <span class="col-info" data-tip="Standalone policy definitions assigned individually (not part of an initiative)" title="Single policies">&#9432;</span></div></div>
-        <div class="card card-amber" title="Number of initiative (policy set) assignments"><div class="card-num">$InitiativeCount</div><div class="card-label">Initiatives <span class="col-info" data-tip="Policy set definitions (initiatives) that group multiple policies together" title="Initiatives">&#9432;</span></div></div>
-        <div class="card card-magenta" title="Built-in regulatory compliance initiative assignments (e.g. CIS, NIST, PCI DSS)"><div class="card-num">$RegulatoryCount</div><div class="card-label">Regulatory <span class="col-info" data-tip="Built-in Microsoft regulatory compliance initiatives mapped to standards like CIS, NIST, ISO 27001" title="Regulatory initiatives">&#9432;</span></div></div>
-        <div class="card card-green" title="Assignments with enforcement mode set to Default (actively blocking/remediating)"><div class="card-num">$enforcedCount</div><div class="card-label">Enforced <span class="col-info" data-tip="Assignments in Default enforcement mode — actively preventing non-compliant deployments or auto-remediating" title="Enforced count">&#9432;</span></div></div>
-        <div class="card $(if ($auditEffectCount -gt 0) { 'card-amber' } else { 'card-gray' })" title="Assignments using Audit or AuditIfNotExists effect — they flag but don't block"><div class="card-num">$auditEffectCount</div><div class="card-label">Audit Effect <span class="col-info" data-tip="Policies with Audit/AuditIfNotExists effect type — they report non-compliance but do NOT block deployments" title="Audit effect count">&#9432;</span></div></div>
-        <div class="card $(if ($auditOnlyCount -gt 0) { 'card-red' } else { 'card-gray' })" title="Assignments with enforcement mode set to DoNotEnforce — completely passive, no effect applied"><div class="card-num">$auditOnlyCount</div><div class="card-label">DoNotEnforce <span class="col-info" data-tip="Assignments with enforcement disabled (DoNotEnforce mode) — policy exists but is completely passive" title="DoNotEnforce count">&#9432;</span></div></div>
-        $(if ($CEPTestResults.Count -gt 0) {
-            $ceScoreClass = if ($ceScore -ge 80) { 'card-green' } elseif ($ceScore -ge 50) { 'card-amber' } else { 'card-red' }
-            "<div class=`"card $ceScoreClass`"><div class=`"card-num`">${ceScore}%</div><div class=`"card-label`">CE+ Score <span class=`"experimental-tag`">Experimental</span></div></div>"
-        })
-    </div>
-
-    <div class="grid-2" style="margin-top:16px;">
-        <div class="insight-box" style="text-align:center;">
-            <h4>&#x1F4E6; Resource Perspective</h4>
-            <div class="big-num" style="color:$(if ($totalNC -gt 0) { 'var(--red)' } else { 'var(--green)' })">$totalNC</div>
-            <p>Unique non-compliant resources<br><span class="text-dim">Fix these resources to resolve all violations</span></p>
-            $(if ($totalNC -gt 0) { "<a href='#details-nc-resources' onclick=`"navigateTo('sec-engineering','details-nc-resources'); return false;`" style='color:#5bc0de;text-decoration:underline;cursor:pointer;'>View by resource &rarr;</a>" })
+    <details class="report-disclosure depth-2" id="details-key-findings">
+        <summary>Key Findings &amp; Risks <span class="disclosure-meta">Deterministic findings and recommended actions</span></summary>
+        <div class="details-content">
+            <div class="note-box"><span class="note-icon">&#x1F4AC;</span><span>Findings are automatically generated based on your policy data. <strong style="color:var(--red)">Red callouts</strong> = critical issues requiring immediate action (e.g. high-security policies not enforced). <strong style="color:var(--amber)">Amber callouts</strong> = warnings to investigate (e.g. non-compliant resources, missing Deny policies). <strong style="color:var(--accent)">Blue callouts</strong> = informational notes (e.g. disabled policies, housekeeping). <strong style="color:var(--green)">Green callouts</strong> = healthy areas confirmed. Hover over &#x24D8; icons for additional context.</span></div>
+            $findingsHtml
+            $(if (-not $findingsHtml -and $hasEvaluatedCompliance) { "<p class='text-dim'>No significant findings to report from the evaluated data.</p>" })
         </div>
-        <div class="insight-box" style="text-align:center;">
-            <h4>&#x1F4DC; Policy Perspective</h4>
-            <div class="big-num" style="color:$(if ($ncPolicyCount -gt 0) { 'var(--amber)' } else { 'var(--green)' })">$ncPolicyCount</div>
-            <p>Policies with non-compliant resources<br><span class="text-dim">Across $assignmentsWithNC assignments &middot; $totalNCEntries total evaluations</span></p>
-            $(if ($ncPolicyCount -gt 0) { "<a href='#details-nc-policies' onclick=`"navigateTo('sec-engineering','details-nc-policies'); return false;`" style='color:#5bc0de;text-decoration:underline;cursor:pointer;'>View by policy &rarr;</a>" })
-        </div>
-    </div>
-
-    <h3 class="sub-title">Key Findings &amp; Risks</h3>
-    <div class="note-box"><span class="note-icon">&#x1F4AC;</span><span>Findings are automatically generated based on your policy data. <strong style="color:var(--red)">Red callouts</strong> = critical issues requiring immediate action (e.g. high-security policies not enforced). <strong style="color:var(--amber)">Amber callouts</strong> = warnings to investigate (e.g. non-compliant resources, missing Deny policies). <strong style="color:var(--accent)">Blue callouts</strong> = informational notes (e.g. disabled policies, housekeeping). <strong style="color:var(--green)">Green callouts</strong> = healthy areas confirmed. Hover over &#x24D8; icons for additional context.</span></div>
-    $findingsHtml
-    $(if (-not $findingsHtml) { "<p class='text-dim'>No significant findings to report. All assignments are compliant and properly enforced.</p>" })
-
-    <div class="grid-3" style="margin-top:20px;">
-        <div class="insight-box">
-            <h4>&#x1F6E1;&#xFE0F; Security <span class="col-info" data-tip="Count of policies rated High risk — these represent the greatest security exposure in your environment" title="Security overview">&#9432;</span></h4>
-            <div class="big-num" style="color:$(if ($highRiskCount -gt 0) { 'var(--red)' } else { 'var(--green)' })">$highRiskCount</div>
-            <p>High-risk items &middot; $highSecurityCount high-security policies deployed</p>
-        </div>
-        <div class="insight-box">
-            <h4>&#x1F50D; Coverage <span class="col-info" data-tip="Number of Azure scopes (MGs, Subscriptions, RGs) that have at least one policy assignment" title="Coverage overview">&#9432;</span></h4>
-            <div class="big-num" style="color:$(if ($scopesNoDeny.Count -gt 0) { 'var(--amber)' } else { 'var(--green)' })">$($scopesWithPolicies.Count)</div>
-            <p>Scopes monitored &middot; $($scopesNoDeny.Count) without preventive controls</p>
-        </div>
-        <div class="insight-box">
-            <h4>&#x1F4CB; Remediation <span class="col-info" data-tip="Total remediation actions generated from all findings — prioritised into 30/60/90-day phases" title="Remediation overview">&#9432;</span></h4>
-            <div class="big-num" style="color:$(if ($remCritical -gt 0) { 'var(--red)' } elseif ($remHigh -gt 0) { 'var(--amber)' } else { 'var(--green)' })">$($remediationItems.Count)</div>
-            <p>Action items &middot; $remCritical critical, $remHigh high priority</p>
-        </div>
-    </div>
+    </details>
 
     $(if ($topNCRows) {
     @"
-    <h3 class="sub-title" style="margin-top:24px;">Top 10 Non-Compliant Assignments &#x1F4DC; <button class="copy-btn" onclick="copyTable('exec-top-table',this)" title="Copy table to clipboard">&#x1F4CB; Copy</button></h3>
-    <p class="text-dim" style="margin-bottom:8px;">Policy perspective: NC counts are per-assignment. The same resource may be counted under multiple assignments.</p>
-    <div class="table-wrap">
-    <table id="exec-top-table">
-    <thead><tr><th class="sortable" onclick="sortTable('exec-top-table',0)">Display Name <span class="col-info" data-tip="The friendly name of the policy or initiative assignment" title="Assignment display name">&#9432;</span></th><th>Type <span class="col-info" data-tip="Initiative (regulatory or standard) or single Policy" title="Assignment type">&#9432;</span></th><th class="sortable" onclick="sortTable('exec-top-table',2)">NC Resources <span class="col-info" data-tip="Number of resources currently non-compliant with this assignment" title="Non-compliant resource count">&#9432;</span></th><th>Scope <span class="col-info" data-tip="The Azure hierarchy level and name where this assignment is applied" title="Assignment scope">&#9432;</span></th><th>Enforcement <span class="col-info" data-tip="Default = actively enforced; DoNotEnforce = audit-only mode" title="Enforcement mode">&#9432;</span></th></tr></thead>
-    <tbody>$topNCRows</tbody>
-    </table>
-    </div>
-"@
-    })
-</section>
-
-<hr class="section-sep" data-label="Engineering">
-
-<!-- ══════════════════════════════════════════════════════ -->
-<!--  2. ENGINEERING REPORT                                -->
-<!-- ══════════════════════════════════════════════════════ -->
-<section id="sec-engineering">
-    <div class="section-header">
-        <h2>Engineering Report</h2>
-        <span class="section-num">Section 2 of $totalSections</span>
-    </div>
-
-    <div class="section-intro">
-        <p><strong>Purpose:</strong> Complete technical inventory of every policy assignment and non-compliant resource. Use this section for deep-dive investigation or data export.</p>
-        <p>Summary tables show aggregated counts. Expand the collapsible &#x25B6; panels below for full searchable data.</p>
-    </div>
-
-    <div class="note-box"><span class="note-icon">&#x1F4AC;</span><span><strong>Scope Type</strong> indicates where the policy is assigned: Management Group (inherited by all child resources), Subscription, or Resource Group (most specific). <strong>NC Resources</strong> = count of resources violating the policy rule.</span></div>
-
-    <div class="grid-2" style="margin-bottom:20px;">
-        <div>
-            <h3 class="sub-title">Assignments by Scope <span class="col-info" data-tip="Shows how policy assignments are distributed across Azure hierarchy levels. Management Group assignments are inherited by all subscriptions and resource groups below them." title="Shows how policy assignments are distributed across Azure hierarchy levels">i</span></h3>
-            <div class="table-wrap">
-            <table><thead><tr><th>Scope Type <span class="col-info" data-tip="The Azure hierarchy level where the policy is assigned. Management Group = inherited by all child subscriptions and RGs. Subscription = applies to all RGs within. Resource Group = most specific, only applies to that RG." title="Where the policy is assigned in the Azure hierarchy">i</span></th><th>Assignments <span class="col-info" data-tip="Total number of policy/initiative assignments at this scope level. Includes all effect types (Audit, Deny, DINE, etc.) and enforcement modes." title="Total policy assignments at this scope">i</span></th><th>With NC <span class="col-info" data-tip="How many assignments at this scope have at least one non-compliant resource. A high ratio (With NC / Assignments) indicates widespread compliance gaps at this scope level." title="Assignments with non-compliant resources">i</span></th><th>NC Resources <span class="col-info" data-tip="Sum of non-compliant resource counts across all assignments at this scope. Note: the same resource may be counted multiple times if it violates multiple policies." title="Non-compliant resource count at this scope">i</span></th></tr></thead>
-            <tbody>$scopeBreakdownRows</tbody></table>
-            </div>
-        </div>
-        <div>
-            <h3 class="sub-title">Effect Type Distribution <span class="col-info" data-tip="Breakdown of enforcement effects across all assignments. For initiatives with mixed effects, the dominant (most common) member-policy effect is shown. Hover each effect name in the table for a description." title="Breakdown of enforcement effects across all assignments">i</span></h3>
-            <div class="table-wrap">
-            <table><thead><tr><th>Effect Type <span class="col-info" data-tip="The enforcement mechanism of the policy: Deny = blocks non-compliant resources, Audit = flags only, DeployIfNotExists = auto-remediates, Modify = auto-fixes properties, Disabled = not evaluated. Hover each effect name for its specific description." title="The enforcement mechanism of the policy">i</span></th><th>Count <span class="col-info" data-tip="Number of policy/initiative assignments using this effect type. For initiatives, the dominant member-policy effect is used for classification." title="Number of assignments with this effect">i</span></th><th>Share <span class="col-info" data-tip="Percentage of total assignments ($totalAssignments) using this effect type. A healthy distribution typically has 15-25% Deny, 40-60% Audit/AuditIfNotExists, and some DINE/Modify for auto-remediation." title="Percentage of total assignments">i</span></th></tr></thead>
-            <tbody>$effectBreakdownRows</tbody></table>
-            </div>
-            <p class="table-footnote">* <strong>Parameterised</strong> = the policy effect is defined as a parameter (e.g. <code>[parameters('effect')]</code>). The actual effect depends on the value set at assignment time&mdash;most Azure built-in policies default to <em>Audit</em>. For initiatives, the dominant member-policy effect is shown.</p>
-        </div>
-    </div>
-
-    $(if ($categoryRows) {
-    @"
-    <details>
-        <summary>&#x1F4C2; Policy Categories ($($categoryBreakdown.Count) categories)</summary>
+    <details class="report-disclosure depth-2" id="details-findings-nc" style="margin-top:24px;">
+        <summary>Top 10 Non-Compliant Assignments <span class="disclosure-meta">Policy-level drill-down</span></summary>
         <div class="details-content">
+            <p class="text-dim" style="margin-bottom:8px;">Policy perspective: NC counts are per-assignment. The same resource may be counted under multiple assignments.</p>
+            <button class="copy-btn" onclick="copyTable('exec-top-table',this)" title="Copy table to clipboard">&#x1F4CB; Copy</button>
             <div class="table-wrap">
-            <table><thead><tr><th>Category <span class="col-info" data-tip="The Azure Policy definition category from Microsoft metadata" title="Policy category">&#9432;</span></th><th>Assignments <span class="col-info" data-tip="Number of policy assignments in this category" title="Assignment count">&#9432;</span></th><th>NC Resources <span class="col-info" data-tip="Total non-compliant resources across all assignments in this category" title="Non-compliant count">&#9432;</span></th><th>Share <span class="col-info" data-tip="Percentage of total assignments represented by this category" title="Category share">&#9432;</span></th></tr></thead>
-            <tbody>$categoryRows</tbody></table>
+            <table id="exec-top-table">
+            <thead><tr><th class="sortable" onclick="sortTable('exec-top-table',0)">Display Name <span class="col-info" data-tip="The friendly name of the policy or initiative assignment" title="Assignment display name">&#9432;</span></th><th>Type <span class="col-info" data-tip="Initiative (regulatory or standard) or single Policy" title="Assignment type">&#9432;</span></th><th class="sortable" onclick="sortTable('exec-top-table',2)">NC Resources <span class="col-info" data-tip="Number of resources currently non-compliant with this assignment" title="Non-compliant resource count">&#9432;</span></th><th>Scope <span class="col-info" data-tip="The Azure hierarchy level and name where this assignment is applied" title="Assignment scope">&#9432;</span></th><th>Enforcement <span class="col-info" data-tip="Default = actively enforced; DoNotEnforce = audit-only mode" title="Enforcement mode">&#9432;</span></th></tr></thead>
+            <tbody>$topNCRows</tbody>
+            </table>
             </div>
-            <p class="text-dim" style="margin-top:8px;">Categories are sourced from Azure Policy definition metadata — not inferred from names.</p>
         </div>
     </details>
 "@
     })
+</section>
+
+<!-- ══════════════════════════════════════════════════════ -->
+<!--  2. ENGINEERING REPORT                                -->
+<!-- ══════════════════════════════════════════════════════ -->
+<section id="sec-engineering" class="report-page" data-report-page data-page-group="page-engineer">
+<details class="section-disclosure">
+    <summary>
+        <span>Engineering Report</span>
+        <span class="section-num">Section 2 of $totalSections</span>
+        <span class="disclosure-hint">$totalAssignments assignments · $totalNC affected resources · $ncPolicyCount failing policies</span>
+    </summary>
+    <div class="section-content">
+
+    <div class="section-intro">
+        <p><strong>Purpose:</strong> Actionable technical inventory of every policy assignment and non-compliant resource. Use this section to identify affected records, investigate violations, and export implementation data.</p>
+        <p>Scope placement, effect balance, category distribution, and coverage design are analysed in CSA / Architect. Expand the panels below for searchable assignment and resource records.</p>
+    </div>
+
+    <div class="note-box"><span class="note-icon">&#x1F4AC;</span><span><strong>Scope Type</strong> indicates where the policy is assigned: Management Group (inherited by all child resources), Subscription, or Resource Group (most specific). <strong>NC Resources</strong> = count of resources violating the policy rule.</span></div>
 
     <details>
         <summary>&#x1F4C4; All Policy Assignments ($totalAssignments)</summary>
@@ -4734,23 +5417,48 @@ $(if ($AIInsights) { '                    <li><strong>AI Executive Insights</str
 "@
     })
 
-$exemptionSubHtml
-</section>
+    $(if ($costRows) {
+    @"
+    <details id="details-cost-policies">
+        <summary>&#x1F4CA; Policies with Cost/Operational Impact</summary>
+        <div class="details-content">
+            <p class="text-dim" style="margin-bottom:12px;">Assignment-level inventory supporting the aggregate cost exposure analysis in CSA / Architect. Validate heuristic exposure against official pricing and actual usage before implementation decisions.</p>
+            <div class="filter-bar">
+                <input type="text" id="filter-cost" placeholder="Search policies..." oninput="filterTable('cost-table','filter-cost')">
+                <span class="count" id="count-cost"></span>
+                <button class="copy-btn" onclick="copyTable('cost-table',this)" title="Copy table to clipboard">&#x1F4CB; Copy</button>
+            </div>
+            <div class="table-wrap">
+            <table id="cost-table">
+            <thead><tr><th>Policy</th><th>Cost Exposure</th><th>Operational Overhead</th><th>Category</th><th>Effect</th><th>Enforcement</th><th>Scope</th></tr></thead>
+            <tbody>$costRows</tbody>
+            </table>
+            </div>
+        </div>
+    </details>
+"@
+    })
 
-<hr class="section-sep" data-label="Architecture">
+$exemptionSubHtml
+    </div>
+</details>
+</section>
 
 <!-- ══════════════════════════════════════════════════════ -->
 <!--  3. ARCHITECTURE INSIGHTS                             -->
 <!-- ══════════════════════════════════════════════════════ -->
-<section id="sec-architecture">
-    <div class="section-header">
-        <h2>Architecture Insights</h2>
+<section id="sec-architecture" class="report-page" data-report-page data-page-group="page-csa">
+<details class="section-disclosure">
+    <summary>
+        <span>Architecture Insights</span>
         <span class="section-num">Section 3 of $totalSections</span>
-    </div>
+        <span class="disclosure-hint">$($scopesWithPolicies.Count) scopes · $($scopesNoDeny.Count) without Deny · $auditOnlyCount without enforcement</span>
+    </summary>
+    <div class="section-content">
 
     <div class="section-intro">
         <p><strong>Purpose:</strong> Evaluate how well your policy architecture is designed. This section analyses scope hierarchy, the balance between preventive/detective/remediation controls, and identifies anti-patterns.</p>
-        <p>A healthy architecture assigns policies at the <strong>Management Group</strong> level (centralised) and maintains a mix of <strong>Deny</strong> (preventive), <strong>Audit</strong> (detective), and <strong>DINE/Modify</strong> (remediation) effects.</p>
+        <p>Management Group assignments can provide centralised governance, while subscription or resource-group assignments can also be intentional. Assess scope placement against ownership, inheritance, exclusions, and organisational requirements rather than a universal target.</p>
     </div>
 
     <div class="legend">
@@ -4763,7 +5471,7 @@ $exemptionSubHtml
         <div class="legend-grid">
             <div class="legend-item"><span class="legend-dot dot-red"></span> &#x1F6D1; Preventive (Deny) &mdash; blocks non-compliant actions</div>
             <div class="legend-item"><span class="legend-dot dot-amber"></span> &#x1F50D; Detective (Audit) &mdash; reports violations only</div>
-            <div class="legend-item"><span class="legend-dot dot-green"></span> &#x1F527; Remediation (DINE/Modify) &mdash; auto-fixes drift</div>
+            <div class="legend-item"><span class="legend-dot dot-green"></span> &#x1F527; Remediation (DINE/Modify) &mdash; remediating effect assigned; outcome requires evidence</div>
             $(if ($disabledCount -gt 0) { "<div class='legend-item'><span class='legend-dot dot-gray'></span> &#x26D4; Disabled &mdash; policy exists but is not evaluated</div>" })
         </div>
     </div>
@@ -4850,13 +5558,7 @@ $exemptionSubHtml
                             <tr><td style="padding:4px 8px;">&#x1F527; <strong>Remediation</strong> (DINE/Modify)</td><td style="text-align:center;padding:4px 8px;">15&ndash;25%</td><td style="text-align:center;padding:4px 8px;color:var(--$remHealth);font-weight:600;">${remediativePct}%</td><td style="padding:4px 8px;">Auto-deploys or corrects configurations. Reduces manual toil and ensures baseline compliance continuously.</td></tr>
                         </tbody>
                     </table>
-                    <p><strong>Key takeaways:</strong></p>
-                    <ul style="margin:4px 0 0 16px;padding:0;">
-                        <li><strong>Detection-heavy</strong> (Audit &gt;55%) &mdash; Your environment relies on flagging violations after the fact. Consider upgrading critical Audit policies to Deny.</li>
-                        <li><strong>Low prevention</strong> (&lt;25%) &mdash; Non-compliant resources can be created freely. Prioritise adding Deny to security-critical policies (public access, allowed locations, required tags).</li>
-                        <li><strong>Low remediation</strong> (&lt;15%) &mdash; Most fixes require manual intervention. Add DINE/Modify for diagnostic settings, backup, encryption, and tagging.</li>
-                        <li><strong>Disabled policies</strong> &mdash; If present, these are not evaluated at all and count as governance gaps.</li>
-                    </ul>
+                    $controlBalanceTakeawaysHtml
                 </div>
             </details>
         </div>
@@ -4876,10 +5578,26 @@ $exemptionSubHtml
         </div>
     </div>
 
+    $(if ($categoryRows) {
+    @"
+    <details>
+        <summary>&#x1F4C2; Policy Category Distribution ($($categoryBreakdown.Count) categories)</summary>
+        <div class="details-content">
+            <p class="text-dim" style="margin-bottom:12px;">Design view of policy concentration by Azure definition category. Use it to identify over-represented domains and potential control gaps.</p>
+            <div class="table-wrap">
+            <table><thead><tr><th>Category <span class="col-info" data-tip="The Azure Policy definition category from Microsoft metadata" title="Policy category">&#9432;</span></th><th>Assignments <span class="col-info" data-tip="Number of policy assignments in this category" title="Assignment count">&#9432;</span></th><th>NC Resources <span class="col-info" data-tip="Total non-compliant resources across all assignments in this category" title="Non-compliant count">&#9432;</span></th><th>Share <span class="col-info" data-tip="Percentage of total assignments represented by this category" title="Category share">&#9432;</span></th></tr></thead>
+            <tbody>$categoryRows</tbody></table>
+            </div>
+            <p class="text-dim" style="margin-top:8px;">Categories are sourced from Azure Policy definition metadata, not inferred from names.</p>
+        </div>
+    </details>
+"@
+    })
+
     <details id="details-coverage">
         <summary>&#x1F50D; Scope Coverage Analysis ($($scopesWithPolicies.Count) scopes)</summary>
         <div class="details-content">
-            <p class="text-dim" style="margin-bottom:12px;">Shows whether each scope has preventive (Deny), auto-remediation (DINE/Modify), and monitoring (Audit) policies assigned.</p>
+            <p class="text-dim" style="margin-bottom:12px;">Shows whether each scope has preventive (Deny), remediating (DINE/Modify), and monitoring (Audit) effects assigned. It does not establish task outcome.</p>
             <div class="filter-bar">
                 <input type="text" id="filter-coverage" placeholder="Search scopes..." oninput="filterTable('coverage-table','filter-coverage')">
                 <span class="count" id="count-coverage">$($scopesWithPolicies.Count) scopes</span>
@@ -4887,41 +5605,28 @@ $exemptionSubHtml
             </div>
             <div class="table-wrap">
             <table id="coverage-table">
-            <thead><tr><th class="sortable" onclick="sortTable('coverage-table',0)">Scope Name <span class="col-info" data-tip="The name of the management group, subscription, or resource group" title="Scope name">&#9432;</span></th><th class="sortable" onclick="sortTable('coverage-table',1)">Scope Type <span class="col-info" data-tip="Management Group, Subscription, or Resource Group" title="Scope type">&#9432;</span></th><th class="sortable" onclick="sortTable('coverage-table',2)">Assignments <span class="col-info" data-tip="Total number of policy assignments at this scope" title="Assignment count">&#9432;</span></th><th>Has Deny <span class="col-info" data-tip="Whether this scope has at least one Deny policy to block non-compliant deployments" title="Deny policy presence">&#9432;</span></th><th>Has DINE/Modify <span class="col-info" data-tip="Whether this scope has DeployIfNotExists or Modify policies for auto-remediation" title="Auto-remediation presence">&#9432;</span></th><th>Has Audit <span class="col-info" data-tip="Whether this scope has Audit or AuditIfNotExists policies for monitoring" title="Audit policy presence">&#9432;</span></th><th class="sortable" onclick="sortTable('coverage-table',6)">NC Resources <span class="col-info" data-tip="Number of non-compliant resources at this scope" title="Non-compliant count">&#9432;</span></th></tr></thead>
+            <thead><tr><th class="sortable" onclick="sortTable('coverage-table',0)">Scope Name <span class="col-info" data-tip="The name of the management group, subscription, or resource group" title="Scope name">&#9432;</span></th><th class="sortable" onclick="sortTable('coverage-table',1)">Scope Type <span class="col-info" data-tip="Management Group, Subscription, or Resource Group" title="Scope type">&#9432;</span></th><th class="sortable" onclick="sortTable('coverage-table',2)">Assignments <span class="col-info" data-tip="Total number of policy assignments at this scope" title="Assignment count">&#9432;</span></th><th>Has Deny <span class="col-info" data-tip="Whether this scope has at least one Deny policy to block non-compliant deployments" title="Deny policy presence">&#9432;</span></th><th>Has DINE/Modify <span class="col-info" data-tip="Whether this scope has assigned DeployIfNotExists or Modify effects; task outcome requires evidence" title="Remediating effect presence">&#9432;</span></th><th>Has Audit <span class="col-info" data-tip="Whether this scope has Audit or AuditIfNotExists policies for monitoring" title="Audit policy presence">&#9432;</span></th><th class="sortable" onclick="sortTable('coverage-table',6)">NC Resources <span class="col-info" data-tip="Number of non-compliant resources at this scope" title="Non-compliant count">&#9432;</span></th></tr></thead>
             <tbody>$coverageRows</tbody>
             </table>
             </div>
         </div>
     </details>
 
-    $(if ($enforcementGapRows) {
-    @"
-    <details open>
-        <summary>&#x1F513; Enforcement Gaps ($($enforcementGapItems.Count) policies in audit-only mode)</summary>
-        <div class="details-content">
-            <p class="text-dim" style="margin-bottom:12px;">These policies are assigned but not enforced. Non-compliant deployments will NOT be blocked.</p>
-            <div class="table-wrap">
-            <table id="enforcement-gap-table">
-            <thead><tr><th class="sortable" onclick="sortTable('enforcement-gap-table',0)">Policy Name <span class="col-info" data-tip="The name of the policy assignment in audit-only or DoNotEnforce mode" title="Policy name">&#9432;</span></th><th>Scope <span class="col-info" data-tip="Where this policy is assigned (scope name)" title="Assignment scope">&#9432;</span></th><th>Effect Type <span class="col-info" data-tip="The policy effect type (e.g. Audit, Deny) — currently not being enforced" title="Effect type">&#9432;</span></th><th class="sortable" onclick="sortTable('enforcement-gap-table',3)">Security Impact <span class="col-info" data-tip="How significantly security is affected by this policy not being enforced" title="Security impact">&#9432;</span></th><th>Risk Level <span class="col-info" data-tip="Combined risk assessment of having this policy in audit-only mode" title="Risk level">&#9432;</span></th></tr></thead>
-            <tbody>$enforcementGapRows</tbody>
-            </table>
-            </div>
-        </div>
-    </details>
-"@
-    })
+    </div>
+</details>
 </section>
-
-<hr class="section-sep" data-label="Governance">
 
 <!-- ══════════════════════════════════════════════════════ -->
 <!--  4. GOVERNANCE & COMPLIANCE                           -->
 <!-- ══════════════════════════════════════════════════════ -->
-<section id="sec-governance">
-    <div class="section-header">
-        <h2>Governance &amp; Compliance</h2>
+<section id="sec-governance" class="report-page" data-report-page data-page-group="page-csa">
+<details class="section-disclosure">
+    <summary>
+        <span>Governance &amp; Compliance</span>
         <span class="section-num">Section 4 of $totalSections</span>
-    </div>
+        <span class="disclosure-hint">$RegulatoryCount regulatory assignments · CE+ $($CEPAssessment.State) · data $dataQualityLabel</span>
+    </summary>
+    <div class="section-content">
 
     <div class="section-intro">
         <p><strong>Purpose:</strong> Shows how your Azure policies map to recognised security frameworks and certifications. Use this to assess <strong>audit readiness</strong> and identify <strong>compliance gaps</strong> before an assessment.</p>
@@ -4951,14 +5656,17 @@ $exemptionSubHtml
     </table>
     </div>
 
+$cepEvidenceHtml
+
 $(if ($CEPTestResults.Count -gt 0) {
 @"
     <h3 class="sub-title">Cyber Essentials Plus &mdash; Test Results <span class="experimental-tag">Experimental</span></h3>
     <div class="note-box"><span class="note-icon">&#x26A0;&#xFE0F;</span><span><strong>Experimental Feature:</strong> CE / CE+ assessment is a community-developed, experimental feature. It is <strong>not an official Cyber Essentials certification test</strong> and should not be used as a substitute for professional CE/CE+ assessment. Results are indicative only.</span></div>
+    <div class="note-box"><span class="note-icon">&#x1F4DA;</span><span><strong>Evidence sources:</strong> Azure Policy mapping uses the <strong>UK NCSC Cyber Essentials v3.1 initiative</strong> when available. Independent technical checks use the <strong>NCSC CE+ v3.2 Test Specification</strong>. The versions differ because they are separate evidence sources for separate assessment phases.</span></div>
     $ceMultiAssignmentBanner
 $(if (-not $isMultiAssignment) {
 @"
-    <div class="note-box"><span class="note-icon">&#x1F4AC;</span><span><strong>Test Statuses:</strong> <span class="badge status-pass">PASS</span> = requirement met. <span class="badge status-fail">FAIL</span> = requirement not met, action needed. <span class="badge status-warn">WARN</span> = partial compliance, review recommended. <span class="badge status-skip">SKIP</span> = test could not run (data unavailable). <span class="badge status-manual">MANUAL</span> = requires human verification (cannot be automated).</span></div>
+    <div class="note-box"><span class="note-icon">&#x1F4AC;</span><span><strong>Test Statuses:</strong> <span class="badge status-pass">AUTOMATED PASS</span> = automated configuration checks passed, but listed manual verification may remain. <span class="badge status-fail">FAIL</span> = requirement not met, action needed. <span class="badge status-warn">WARN</span> = partial compliance, review recommended. <span class="badge status-skip">SKIP</span> = test could not run (data unavailable). <span class="badge status-manual">MANUAL</span> = requires human verification (cannot be automated).</span></div>
     $testSummaryCards
 "@
 })
@@ -4969,7 +5677,7 @@ $(if (-not $isMultiAssignment) {
         <div class="details-content">
             <div class="table-wrap">
             <table id="tests-table">
-            <thead><tr><th class="sortable" onclick="sortTable('tests-table',0)">Test # <span class="col-info" data-tip="Sequential test identifier within the CE+ assessment" title="Test number">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',1)">Control Group <span class="col-info" data-tip="The Cyber Essentials control group this test belongs to (e.g. Firewalls, Secure Configuration)" title="CE control group">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',2)">Test Name <span class="col-info" data-tip="Description of what this specific test validates" title="Test description">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',3)">Status <span class="col-info" data-tip="PASS = met, FAIL = not met, WARN = partial, SKIP = unavailable, MANUAL = human check needed" title="Test result">&#9432;</span></th><th>Details <span class="col-info" data-tip="Additional context about the test result and any findings" title="Result details">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',5)">NC <span class="col-info" data-tip="Number of non-compliant resources found by this test" title="Non-compliant count">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',6)">Compliant <span class="col-info" data-tip="Number of resources that passed this test" title="Compliant count">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',7)">Total <span class="col-info" data-tip="Total resources evaluated by this test" title="Total evaluated">&#9432;</span></th></tr></thead>
+            <thead><tr><th class="sortable" onclick="sortTable('tests-table',0)">Test # <span class="col-info" data-tip="Sequential test identifier within the CE+ assessment" title="Test number">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',1)">Control Group <span class="col-info" data-tip="The Cyber Essentials control group this test belongs to (e.g. Firewalls, Secure Configuration)" title="CE control group">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',2)">Test Name <span class="col-info" data-tip="Description of what this specific test validates" title="Test description">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',3)">Status <span class="col-info" data-tip="PASS = met, FAIL = not met, WARN = partial, SKIP = unavailable, MANUAL = human check needed" title="Test result">&#9432;</span></th><th>Details <span class="col-info" data-tip="Additional context about the test result and whether evidence is resource-based, configuration-based, or manual" title="Result details">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',5)">NC <span class="col-info" data-tip="Non-compliant resource count; N/A means the check does not measure resources" title="Non-compliant count">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',6)">Compliant <span class="col-info" data-tip="Compliant resource count; N/A means the check does not measure resources" title="Compliant count">&#9432;</span></th><th class="sortable" onclick="sortTable('tests-table',7)">Total <span class="col-info" data-tip="Total evaluated resources; N/A means the check uses configuration or manual evidence" title="Total evaluated">&#9432;</span></th></tr></thead>
             <tbody>$testRows</tbody>
             </table>
             </div>
@@ -4979,7 +5687,15 @@ $(if (-not $isMultiAssignment) {
 })
 "@
 } else {
-    '<div class="callout callout-info"><span class="callout-icon">&#x2139;&#xFE0F;</span><div><strong>CE+ Tests Not Run</strong><p>Run with <code>-CEP Test</code> or <code>-CEP Full</code> to populate Cyber Essentials Plus test results.</p></div></div>'
+    if ($CEPAssessment.State -eq 'NotRequested') {
+        '<div class="callout callout-info"><span class="callout-icon">&#x2139;&#xFE0F;</span><div><strong>CE+ Tests Not Run</strong><p>Run with <code>-CEP Test</code> or <code>-CEP Full</code> to populate Cyber Essentials Plus test results.</p></div></div>'
+    } elseif ($CEPAssessment.State -eq 'EvaluationFailed') {
+        '<div class="callout callout-warning"><span class="callout-icon">&#x26A0;&#xFE0F;</span><div><strong>Evaluation failed</strong><p>A query or runtime failure prevented CEP test evaluation. Review data quality and runtime diagnostics.</p></div></div>'
+    } elseif ($CEPAssessment.State -eq 'PrerequisiteUnavailable') {
+        "<div class='callout callout-info'><span class='callout-icon'>&#x2139;&#xFE0F;</span><div><strong>Assessment prerequisite unavailable</strong><p>$($CEPAssessment.PrerequisiteReason). Score: N/A.</p></div></div>"
+    } else {
+        '<div class="callout callout-info"><span class="callout-icon">&#x2139;&#xFE0F;</span><div><strong>Assessment partially evaluated</strong><p>No automated test result was available; no score was calculated.</p></div></div>'
+    }
 })
 
 $(if ($CEPExportData.Count -gt 0 -and -not $isMultiAssignment) {
@@ -5018,24 +5734,35 @@ $(if ($CEPExportData.Count -gt 0 -and -not $isMultiAssignment) {
     </details>
 "@
 } elseif ($CEPExportData.Count -eq 0) {
-    '<div class="callout callout-info"><span class="callout-icon">&#x2139;&#xFE0F;</span><div><strong>CE+ Compliance Not Run</strong><p>Run with <code>-CEP Show</code> or <code>-CEP Full</code> to populate Cyber Essentials policy mapping.</p></div></div>'
+    if ($CEPAssessment.State -eq 'NotRequested') {
+        '<div class="callout callout-info"><span class="callout-icon">&#x2139;&#xFE0F;</span><div><strong>CE+ Compliance Not Run</strong><p>Run with <code>-CEP Show</code> or <code>-CEP Full</code> to populate Cyber Essentials policy mapping.</p></div></div>'
+    } elseif ($CEPAssessment.State -eq 'EvaluationFailed' -or $CEPAssessment.MappingState -eq 'Failed') {
+        '<div class="callout callout-warning"><span class="callout-icon">&#x26A0;&#xFE0F;</span><div><strong>Evaluation failed</strong><p>The mapping query or runtime operation failed; no mapping conclusion was produced.</p></div></div>'
+    } elseif ($CEPAssessment.MappingState -eq 'Unavailable') {
+        "<div class='callout callout-info'><span class='callout-icon'>&#x2139;&#xFE0F;</span><div><strong>Mapping unavailable</strong><p>$($CEPAssessment.PrerequisiteReason). An empty mapping is not a 0% result.</p></div></div>"
+    } else {
+        '<div class="callout callout-info"><span class="callout-icon">&#x2139;&#xFE0F;</span><div><strong>Mapping has no evaluated data</strong><p>No mapping score was calculated.</p></div></div>'
+    }
 })
+    </div>
+</details>
 </section>
 
-<hr class="section-sep" data-label="Security">
-
 <!-- ══════════════════════════════════════════════════════ -->
-<!--  5. SECURITY POSTURE                                  -->
+<!--  5. SECURITY ACTION INVENTORY                         -->
 <!-- ══════════════════════════════════════════════════════ -->
-<section id="sec-security">
-    <div class="section-header">
-        <h2>Security Posture</h2>
+<section id="sec-security" class="report-page" data-report-page data-page-group="page-engineer">
+<details class="section-disclosure">
+    <summary>
+        <span>Security Action Inventory</span>
         <span class="section-num">Section 5 of $totalSections</span>
-    </div>
+        <span class="disclosure-hint">$highRiskCount high risk · $totalNC affected resources · $($highSecEnforceIssues.Count) high-security gaps</span>
+    </summary>
+    <div class="section-content">
 
     <div class="section-intro">
-        <p><strong>Purpose:</strong> Understand the security effectiveness of your policy assignments. This section rates each policy by risk level and security impact, and highlights enforcement gaps where policies are not actively protecting your environment.</p>
-        <p>Focus on <strong style="color:var(--red)">High Risk</strong> items first &mdash; these represent the greatest exposure. <strong>Enforcement Gaps</strong> are policies that exist but are in audit-only mode, meaning they report but do not prevent violations.</p>
+        <p><strong>Purpose:</strong> Actionable, assignment-level inventory ordered by risk and security impact. Use it to identify which policies, scopes, and affected resource types require implementation work.</p>
+        <p>Control effectiveness, scope coverage, and preventive/detective/remediation balance are analysed in CSA / Architect. Here, focus on <strong style="color:var(--red)">High Risk</strong> records and assignments in <code>DoNotEnforce</code> mode.</p>
     </div>
 
     <div class="legend">
@@ -5046,7 +5773,7 @@ $(if ($CEPExportData.Count -gt 0 -and -not $isMultiAssignment) {
             <div class="legend-item"><span class="badge risk-low">Low</span> Acceptable risk &mdash; monitor periodically</div>
             <div class="legend-item"><strong style="font-size:0.8rem;">Security Impact:</strong><span style="font-size:0.8rem;"> multi-signal score (effect type + category + name keywords + enforcement mode) measuring security value</span></div>
             <div class="legend-item"><strong style="font-size:0.8rem;">Risk Level:</strong><span style="font-size:0.8rem;"> composite score combining security impact, enforcement gaps, and active controls</span></div>
-            <div class="legend-item"><strong style="font-size:0.8rem;">Enforcement Gap:</strong><span style="font-size:0.8rem;"> high-security policy set to DoNotEnforce &mdash; reports but does not block violations</span></div>
+            <div class="legend-item"><strong style="font-size:0.8rem;">Priority Enforcement Gap:</strong><span style="font-size:0.8rem;"> High/Medium security-impact assignment in DoNotEnforce mode &mdash; configured effects are not applied</span></div>
         </div>
         <div style="margin-top:10px;font-size:0.82rem;color:var(--dim);">
             <strong>Parameterised Initiatives:</strong> When member policy effects are parameter-driven (e.g. <code>[parameters(&apos;effect&apos;)]</code>), the security score is inferred from the <strong>category</strong> (Security Center / Defender for Cloud &rarr; +15, Network / Identity &rarr; +10) and <strong>name keywords</strong> (e.g. &ldquo;defender&rdquo;, &ldquo;encrypt&rdquo;, &ldquo;mfa&rdquo; &rarr; +10). Initiatives like ASC Default and Defender for SQL that deploy agents are scored as <strong>High</strong> security impact.
@@ -5068,35 +5795,26 @@ $(if ($CEPExportData.Count -gt 0 -and -not $isMultiAssignment) {
                 </tbody>
             </table>
             <p><strong>Thresholds:</strong> &ge;75 pts = High, &ge;40 pts = Medium, &ge;15 pts = Low, &lt;15 pts = None</p>
-            <p><strong>Risk Level</strong> is a separate composite: it adds <em>Security Impact</em> contribution (+40/+20/+5), an enforcement-gap penalty (+15 if audit-only on High/Medium security), an active-enforcement bonus (&minus;10 for enforced Deny/DINE/Modify), and a disabled penalty (+10). Thresholds: &ge;40 = High, &ge;20 = Medium, &lt;20 = Low.</p>
+            <p><strong>Risk Level</strong> is a separate composite: it adds <em>Security Impact</em> contribution (+40/+20/+5), an enforcement-gap penalty (+15 for DoNotEnforce on High/Medium security), an active-enforcement bonus (&minus;10 for enforced Deny/DINE/Modify), and a disabled penalty (+10). Thresholds: &ge;40 = High, &ge;20 = Medium, &lt;20 = Low.</p>
         </div>
     </details>
 
-    <div class="summary-cards">
-        <div class="card card-red" title="Policies with high risk level — significant security exposure requiring immediate attention"><div class="card-num">$highRiskCount</div><div class="card-label">High Risk <span class="col-info" data-tip="Policies rated High risk — disabled, misconfigured, or critical security gaps" title="High risk policies">&#9432;</span></div></div>
-        <div class="card card-amber" title="Policies with medium risk level — should be addressed in planned work"><div class="card-num">$medRiskCount</div><div class="card-label">Medium Risk <span class="col-info" data-tip="Policies rated Medium risk — audit-only or partially enforced" title="Medium risk policies">&#9432;</span></div></div>
-        <div class="card card-green" title="Policies with low risk level — acceptable posture"><div class="card-num">$lowRiskCount</div><div class="card-label">Low Risk <span class="col-info" data-tip="Policies rated Low risk — properly enforced with acceptable configuration" title="Low risk policies">&#9432;</span></div></div>
-        <div class="card card-blue" title="Policies scoring ≥75 on the multi-signal security scale — critical for environment protection"><div class="card-num">$highSecurityCount</div><div class="card-label">High Security <span class="col-info" data-tip="Policies scoring ≥75 pts on the security scale (effect type + category + name keywords). See methodology details above." title="High security impact">&#9432;</span></div></div>
-        <div class="card card-gray" title="High-security policies in audit-only or DoNotEnforce mode"><div class="card-num">$($highSecEnforceIssues.Count)</div><div class="card-label">Enforcement Gaps <span class="col-info" data-tip="High-security policies that are NOT enforced — they report violations but don't block them" title="Enforcement gaps">&#9432;</span></div></div>
-    </div>
-
-    <div class="grid-3" style="margin-bottom:20px;">
-        <div class="insight-box">
-            <h4>&#x1F512; Enforcement Rate <span class="col-info" data-tip="Percentage of assignments that are actively enforced (Default mode vs total)" title="Enforcement rate">&#9432;</span></h4>
-            <div class="big-num" style="color:$(if ($auditOnlyCount -eq 0) { 'var(--green)' } elseif ($enforcedCount -gt $auditOnlyCount) { 'var(--amber)' } else { 'var(--red)' })">$([math]::Round(($enforcedCount / [math]::Max($totalAssignments,1)) * 100))%</div>
-            <p>$enforcedCount of $totalAssignments policies actively enforced</p>
+    $(if ($enforcementGapRows) {
+    @"
+    <details>
+        <summary>&#x1F513; Priority Enforcement Gaps ($($enforcementGapItems.Count) High/Medium security-impact assignments)</summary>
+        <div class="details-content">
+            <p class="text-dim" style="margin-bottom:12px;">Action queue containing the risk-prioritised subset of $auditOnlyCount total DoNotEnforce assignments. Their configured effects are not applied.</p>
+            <div class="table-wrap">
+            <table id="enforcement-gap-table">
+            <thead><tr><th class="sortable" onclick="sortTable('enforcement-gap-table',0)">Policy Name <span class="col-info" data-tip="The name of the policy assignment in DoNotEnforce mode" title="Policy name">&#9432;</span></th><th>Scope <span class="col-info" data-tip="Where this policy is assigned (scope name)" title="Assignment scope">&#9432;</span></th><th>Effect Type <span class="col-info" data-tip="The configured policy effect that is not being applied" title="Effect type">&#9432;</span></th><th class="sortable" onclick="sortTable('enforcement-gap-table',3)">Security Impact <span class="col-info" data-tip="How significantly security is affected by this policy not being enforced" title="Security impact">&#9432;</span></th><th>Risk Level <span class="col-info" data-tip="Combined risk assessment while enforcement is disabled" title="Risk level">&#9432;</span></th></tr></thead>
+            <tbody>$enforcementGapRows</tbody>
+            </table>
+            </div>
         </div>
-        <div class="insight-box">
-            <h4>&#x1F6D1; Preventive Coverage <span class="col-info" data-tip="Number of Deny policies that actively block non-compliant resource deployments" title="Preventive coverage">&#9432;</span></h4>
-            <div class="big-num" style="color:$(if ($denyCount -gt 0) { 'var(--green)' } else { 'var(--red)' })">$denyCount</div>
-            <p>Deny policies blocking non-compliant deployments</p>
-        </div>
-        <div class="insight-box">
-            <h4>&#x1F527; Auto-Remediation <span class="col-info" data-tip="Number of DINE/Modify policies that automatically fix configuration drift" title="Auto-remediation">&#9432;</span></h4>
-            <div class="big-num" style="color:$(if ($dineModifyCount -gt 0) { 'var(--green)' } else { 'var(--amber)' })">$dineModifyCount</div>
-            <p>DINE/Modify policies auto-correcting drift</p>
-        </div>
-    </div>
+    </details>
+"@
+    })
 
     <details>
         <summary>&#x1F4CA; Risk-Rated Policy Table ($totalAssignments policies)</summary>
@@ -5136,32 +5854,35 @@ $(if ($CEPExportData.Count -gt 0 -and -not $isMultiAssignment) {
     </div>
 "@
     })
+    </div>
+</details>
 </section>
 
 $alzSectionHtml
 
-<hr class="section-sep" data-label="Cost">
-
 <!-- ══════════════════════════════════════════════════════ -->
-<!--  7. COST INSIGHTS                                     -->
+<!--  7. COST GOVERNANCE                                   -->
 <!-- ══════════════════════════════════════════════════════ -->
-<section id="sec-cost">
-    <div class="section-header">
-        <h2>Cost Insights</h2>
-        <span class="section-num">Section 7 of $totalSections</span>
-    </div>
+<section id="sec-cost" class="report-page" data-report-page data-page-group="page-csa">
+<details class="section-disclosure">
+    <summary>
+        <span>Cost Governance</span>
+        <span class="section-num">Section $costSectionNumber of $totalSections</span>
+        <span class="disclosure-hint">$costHigh high exposure · $opsHigh high overhead · $($validCostEvidence.Count) official records</span>
+    </summary>
+    <div class="section-content">
 
     <div class="section-intro">
-        <p><strong>Purpose:</strong> Understand the cost and operational overhead associated with your policy assignments. Use this to identify optimisation opportunities and right-size your policy evaluation footprint.</p>
-        <p><strong>Cost Impact</strong> estimates the financial effect of deploying or remediating the policy. <strong>Operational Overhead</strong> reflects the management effort required (monitoring, troubleshooting, exceptions).</p>
+        <p><strong>Purpose:</strong> Identify qualitative cost exposure and separate it from official price or actual-cost evidence.</p>
+        <p><strong>Cost exposure</strong> is a Low/Medium/High heuristic based on effect, category, and policy-name signals. It is not measured spend and does not prove that resources are deployed. <strong>Operational Overhead</strong> estimates management effort.</p>
     </div>
 
     <div class="legend">
         <h4>&#x1F3F7;&#xFE0F; Cost &amp; Overhead Legend</h4>
         <div class="legend-grid">
-            <div class="legend-item"><span class="badge risk-high">High Cost</span> Significant infrastructure or licensing cost (e.g. Defender plans ~&dollar;15/server/month, Log Analytics ingestion ~&dollar;2.76/GB)</div>
-            <div class="legend-item"><span class="badge risk-med">Medium Cost</span> Moderate cost &mdash; diagnostics, config changes, agent deployment overhead</div>
-            <div class="legend-item"><span class="badge risk-low">Low Cost</span> Minimal or no additional cost (Audit, Deny, tag operations)</div>
+            <div class="legend-item"><span class="badge risk-high">Cost exposure: High</span> Heuristic signal requiring validation against official pricing and actual usage.</div>
+            <div class="legend-item"><span class="badge risk-med">Cost exposure: Medium</span> Heuristic signal that billable services or operational changes may be involved.</div>
+            <div class="legend-item"><span class="badge risk-low">Cost exposure: Low</span> Lower heuristic exposure; this does not establish the absence of charges.</div>
             <div class="legend-item"><span class="badge risk-high">High Overhead</span> Frequent alerts, agent health monitoring, complex exceptions, regular maintenance</div>
             <div class="legend-item"><span class="badge risk-med">Medium Overhead</span> Periodic attention &mdash; compliance reviews, exception management</div>
             <div class="legend-item"><span class="badge risk-low">Low Overhead</span> Set-and-forget &mdash; minimal ongoing effort</div>
@@ -5172,34 +5893,26 @@ $alzSectionHtml
     </div>
 
     <details style="margin-bottom:18px;">
-        <summary style="cursor:pointer;font-weight:600;font-size:0.95rem;">&#x1F9EE; How are Cost Impact &amp; Operational Overhead calculated?</summary>
+        <summary style="cursor:pointer;font-weight:600;font-size:0.95rem;">How are Cost Exposure &amp; Operational Overhead classified?</summary>
         <div class="details-content" style="padding:12px 16px;">
-            <p style="margin-top:0;"><strong>Cost Impact</strong> uses a <strong>multi-signal point system</strong> (0&ndash;100 scale), with points summed and mapped via thresholds. The key insight: a <em>Modify</em> that adds a tag is essentially free, while a <em>DINE</em> that deploys a Log Analytics agent is expensive &mdash; so <strong>effect type &times; category</strong> is the primary scoring matrix.</p>
-            <table class="report-table" style="font-size:0.82rem;">
-                <thead><tr><th>Signal</th><th>Weight</th><th>Examples</th></tr></thead>
-                <tbody>
-                    <tr><td><strong>Effect &times; Category</strong> (strongest)</td><td>&pm;45 pts</td><td>DINE + Monitoring/Backup&nbsp;+45, DINE + Network&nbsp;+30, Modify + Tags&nbsp;+0, Deny&nbsp;&minus;5</td></tr>
-                    <tr><td><strong>Parameterised &times; Category</strong></td><td>+5 to +30 pts</td><td>Parameterised + Security Center/Monitoring&nbsp;+30, + Network/Compute&nbsp;+15, other&nbsp;+5</td></tr>
-                    <tr><td><strong>Name Keywords</strong></td><td>&pm;10 pts</td><td>&ldquo;backup&rdquo;, &ldquo;log analytics&rdquo;, &ldquo;defender&rdquo;, &ldquo;asc default&rdquo;, &ldquo;sentinel&rdquo; boost cost; &ldquo;tag&rdquo;, &ldquo;naming&rdquo; reduce it</td></tr>
-                </tbody>
-            </table>
-            <p><strong>Thresholds:</strong> &ge;55 pts = High, &ge;30 pts = Medium, &lt;30 pts = Low</p>
+            <p style="margin-top:0;"><strong>Cost exposure</strong> combines effect type, policy category, parameterisation, and policy-name signals, then emits only Low, Medium, or High. Internal weighting is not a price estimate.</p>
+            <p>DINE/Modify assignments associated with monitoring, backup, security plans, infrastructure, or data ingestion generally increase exposure. Audit, Deny, disabled assignments, and governance metadata generally lower exposure, but none of these signals proves a monetary amount.</p>
             <p><strong>Operational Overhead</strong> considers both effect type <em>and</em> category: DINE/Modify on infrastructure = High, Modify on Tags = Low, Deny = Medium (exception management), Audit = Low. For <strong>Parameterised</strong> initiatives, overhead is inferred from category: Security Center/Monitoring/Backup = High, Network/Compute/SQL = Medium, others = Low.</p>
         </div>
     </details>
 
     <div class="summary-cards">
-        <div class="card card-red" title="Policies scoring ≥55 on the cost scale — significant infrastructure/licensing cost"><div class="card-num">$costHigh</div><div class="card-label">High Cost <span class="col-info" data-tip="Policies scoring ≥55 pts on cost scale (effect × category matrix + name keywords). Typically DINE deploying agents, workspaces, or backup vaults." title="High cost impact">&#9432;</span></div></div>
-        <div class="card card-amber" title="Policies scoring 30–54 on the cost scale — moderate infrastructure cost"><div class="card-num">$costMedium</div><div class="card-label">Medium Cost <span class="col-info" data-tip="Policies scoring 30–54 pts on cost scale. Typically DINE for diagnostics/network configs or Modify on infrastructure properties." title="Medium cost impact">&#9432;</span></div></div>
-        <div class="card card-green" title="Policies scoring <30 on the cost scale — minimal or no cost"><div class="card-num">$costLow</div><div class="card-label">Low Cost <span class="col-info" data-tip="Policies scoring <30 pts on cost scale. Typically Audit, Deny, Disabled, or Modify on tags &mdash; no infrastructure deployment." title="Low cost impact">&#9432;</span></div></div>
+        <div class="card card-red"><div class="card-num">$costHigh</div><div class="card-label">Cost exposure: High</div></div>
+        <div class="card card-amber"><div class="card-num">$costMedium</div><div class="card-label">Cost exposure: Medium</div></div>
+        <div class="card card-green"><div class="card-num">$costLow</div><div class="card-label">Cost exposure: Low</div></div>
     </div>
 
     <div class="grid-3" style="margin-bottom:20px;">
         <div class="insight-box">
-            <h4>&#x1F4B0; Cost Impact Summary <span class="col-info" data-tip="Breakdown of policies by estimated financial cost of implementation and maintenance" title="Cost impact breakdown">&#9432;</span></h4>
-            <div class="stat-row"><span>High cost impact</span><strong class="nc-bad">$costHigh</strong></div>
-            <div class="stat-row"><span>Medium cost impact</span><strong class="warn-text">$costMedium</strong></div>
-            <div class="stat-row"><span>Low cost impact</span><strong>$costLow</strong></div>
+            <h4>Cost Exposure Summary</h4>
+            <div class="stat-row"><span>Cost exposure: High</span><strong class="nc-bad">$costHigh</strong></div>
+            <div class="stat-row"><span>Cost exposure: Medium</span><strong class="warn-text">$costMedium</strong></div>
+            <div class="stat-row"><span>Cost exposure: Low</span><strong>$costLow</strong></div>
         </div>
         <div class="insight-box">
             <h4>&#x2699;&#xFE0F; Operational Overhead <span class="col-info" data-tip="Breakdown of policies by ongoing operational management effort required" title="Operational overhead breakdown">&#9432;</span></h4>
@@ -5210,47 +5923,43 @@ $alzSectionHtml
         <div class="insight-box">
             <h4>&#x1F4A1; Optimisation Opportunities <span class="col-info" data-tip="Actionable suggestions to reduce cost and complexity of your policy estate" title="Optimisation suggestions">&#9432;</span></h4>
             <ul style="padding-left:18px;">
-                $(if ($auditOnlyCount -gt 0) { "<li>$auditOnlyCount audit-only policies &mdash; consider enabling enforcement for those with zero NC resources to reduce evaluation overhead.</li>" })
+                $(if ($auditOnlyCount -gt 0) { "<li>$auditOnlyCount assignments use DoNotEnforce. Review business intent, configured effect, exemptions, and impact before changing enforcement mode; zero policy-state records do not establish safe enablement.</li>" })
                 $(if ($disabledCount -gt 0) { "<li>$disabledCount disabled policies &mdash; remove to eliminate unnecessary policy evaluation cycles.</li>" })
                 $(if ($auditOnlyCount -eq 0 -and $disabledCount -eq 0) { "<li class='text-dim'>No immediate optimisation opportunities identified.</li>" })
             </ul>
         </div>
     </div>
 
-    $(if ($costRows) {
+    $(if (-not $costRows) {
+        "<div class='callout callout-info'><span class='callout-icon'>&#x2139;&#xFE0F;</span><div><strong>No elevated cost exposure</strong><p>No policies have been classified with elevated heuristic exposure or operational overhead.</p></div></div>"
+    })
+
+    <h3 class="sub-title">Official Monetary Evidence</h3>
+    $(if ($costEvidenceRows) {
     @"
-    <details>
-        <summary>&#x1F4CA; Policies with Cost/Operational Impact</summary>
-        <div class="details-content">
-            <div class="filter-bar">
-                <input type="text" id="filter-cost" placeholder="Search policies..." oninput="filterTable('cost-table','filter-cost')">
-                <span class="count" id="count-cost"></span>
-                <button class="copy-btn" onclick="copyTable('cost-table',this)" title="Copy table to clipboard">&#x1F4CB; Copy</button>
-            </div>
-            <div class="table-wrap">
-            <table id="cost-table">
-            <thead><tr><th class="sortable" onclick="sortTable('cost-table',0)">Policy <span class="col-info" data-tip="The policy assignment name" title="Policy name">&#9432;</span></th><th class="sortable" onclick="sortTable('cost-table',1)">Cost Impact <span class="col-info" data-tip="Estimated financial impact: High = significant infrastructure/licensing cost, Medium = moderate, Low = minimal" title="Cost impact">&#9432;</span></th><th class="sortable" onclick="sortTable('cost-table',2)">Operational Overhead <span class="col-info" data-tip="Ongoing management effort: High = frequent alerts/maintenance, Medium = periodic, Low = set-and-forget" title="Operational overhead">&#9432;</span></th><th>Category <span class="col-info" data-tip="Azure Policy definition category" title="Category">&#9432;</span></th><th>Effect <span class="col-info" data-tip="The policy effect type" title="Effect type">&#9432;</span></th><th>Enforcement <span class="col-info" data-tip="Default = enforced; DoNotEnforce = audit-only" title="Enforcement mode">&#9432;</span></th><th>Scope <span class="col-info" data-tip="Where this policy is assigned" title="Scope">&#9432;</span></th></tr></thead>
-            <tbody>$costRows</tbody>
-            </table>
-            </div>
-        </div>
-    </details>
+    <div class="callout callout-info"><div><strong>Official evidence only</strong><p>Retail prices are unit-price records, not workload estimates. Cost Management records are actual costs for the stated period. Every amount includes source, region, currency, price or cost date, and retrieval timestamp.</p></div></div>
+    <div class="table-wrap"><table id="cost-evidence-table">
+    <thead><tr><th>Description</th><th>Amount</th><th>Unit / Period</th><th>Region</th><th>Official Source</th><th>Price / Cost Date</th><th>Retrieved At</th></tr></thead>
+    <tbody>$costEvidenceRows</tbody></table></div>
 "@
     } else {
-        "<div class='callout callout-info'><span class='callout-icon'>&#x2139;&#xFE0F;</span><div><strong>No High-Cost Policies</strong><p>No policies have been flagged with significant cost or operational impact.</p></div></div>"
+        '<div class="callout callout-info"><div><strong>No official monetary evidence collected</strong><p>No amounts are shown. Enable Retail Prices API or Cost Management evidence explicitly to include sourced monetary data.</p></div></div>'
     })
+    </div>
+</details>
 </section>
-
-<hr class="section-sep" data-label="Recommendations">
 
 <!-- ══════════════════════════════════════════════════════ -->
 <!--  8. RECOMMENDATIONS & ROADMAP                         -->
 <!-- ══════════════════════════════════════════════════════ -->
-<section id="sec-recommendations">
-    <div class="section-header">
-        <h2>Recommendations &amp; Roadmap</h2>
-        <span class="section-num">Section 8 of $totalSections</span>
-    </div>
+<section id="sec-recommendations" class="report-page" data-report-page data-page-group="page-engineer">
+<details class="section-disclosure">
+    <summary>
+        <span>Recommendations &amp; Roadmap</span>
+        <span class="section-num">Section $recommendationsSectionNumber of $totalSections</span>
+        <span class="disclosure-hint">$remCritical critical · $remHigh high · $remMedium medium · $($remediationItems.Count) total actions</span>
+    </summary>
+    <div class="section-content">
 
     <div class="section-intro">
         <p><strong>Purpose:</strong> A consolidated, prioritised action plan generated from all findings in this report. Items are categorised by urgency and mapped to a 30-60-90 day implementation timeline.</p>
@@ -5270,6 +5979,22 @@ $alzSectionHtml
     </div>
 
     <div class="note-box"><span class="note-icon">&#x1F4AC;</span><span><strong>How the roadmap works:</strong> Items are automatically categorised into 30/60/90-day phases based on priority and effort. The <strong style="color:var(--red)">30-day</strong> column contains critical, low-effort wins. The <strong style="color:var(--amber)">60-day</strong> column covers high-priority compliance work. The <strong style="color:var(--green)">90-day</strong> column addresses coverage gaps and housekeeping.</span></div>
+
+    <details class="report-disclosure depth-3">
+    <summary>Remediation Operational Evidence <span class="disclosure-meta">Task, identity, role, and scope records</span></summary>
+    <div class="details-content">
+    <div class="section-intro"><p>States below come from remediation task, policy-state, managed identity, role assignment, and scope-control evidence. <strong>Succeeded</strong> means a task explicitly reported success; it does not by itself prove current resource compliance. <strong>NotAssessed</strong> means evidence collection was insufficient and is not a healthy or failed conclusion.</p></div>
+$(if ($remediationEvidenceRows) {
+@"
+    <div class="table-wrap"><table id="remediation-evidence-table">
+    <thead><tr><th>Assignment</th><th>Evidence State</th><th>Managed Identity</th><th>Roles</th><th>Remediation Task</th><th>Applicable Resources</th><th>Last Evaluation</th><th>Exemptions / Scope Controls</th><th>Errors</th></tr></thead>
+    <tbody>$remediationEvidenceRows</tbody></table></div>
+"@
+} else {
+    '<div class="callout callout-info"><div><strong>No remediation evidence records</strong><p>No DINE/Modify assignment evidence was available. No working or failed remediation conclusion is reported.</p></div></div>'
+})
+    </div>
+    </details>
 
     <div class="summary-cards">
         <div class="card card-red" title="Items requiring immediate action — active security exposure"><div class="card-num">$remCritical</div><div class="card-label">Critical <span class="col-info" data-tip="Must fix immediately — these represent active security exposure or critical compliance gaps" title="Critical items">&#9432;</span></div></div>
@@ -5316,19 +6041,21 @@ $(if ($remediationItems.Count -gt 0) {
         </div>
     </details>
 "@
+} elseif ($hasEvaluatedCompliance) {
+    '<div class="callout callout-success"><span class="callout-icon">&#x2705;</span><div><strong>No Remediation Items</strong><p>No action items were identified from the available evaluated data.</p></div></div>'
 } else {
-    '<div class="callout callout-success"><span class="callout-icon">&#x2705;</span><div><strong>No Remediation Items</strong><p>No action items identified &mdash; your policies are well-configured!</p></div></div>'
+    '<div class="callout callout-info"><span class="callout-icon">&#x2139;&#xFE0F;</span><div><strong>Remediation assessment unavailable</strong><p>Compliance data must be evaluated before remediation needs can be assessed.</p></div></div>'
 })
+    </div>
+</details>
 </section>
 
 $yamlDeltaSectionHtml
 
-$aiInsightsSectionHtml
-
 <!-- ── Glossary ── -->
-<hr class="section-sep" data-label="Reference">
-<div class="glossary">
-    <h3>&#x1F4D6; Glossary of Terms</h3>
+<details class="report-disclosure depth-3 glossary report-page" data-report-page data-page-group="page-methodology">
+    <summary>Glossary of Terms <span class="disclosure-meta">Reference</span></summary>
+    <div class="details-content">
     <div class="glossary-grid">
         <div class="glossary-item"><span class="glossary-term">Assignment</span><span class="glossary-def">A policy or initiative linked to a specific scope (MG, subscription, or resource group). See <a href="https://learn.microsoft.com/en-us/azure/governance/policy/concepts/assignment-structure" target="_blank" style="color:var(--accent);">docs</a></span></div>
         <div class="glossary-item"><span class="glossary-term">Policy</span><span class="glossary-def">A single rule that evaluates resources for compliance (e.g. &ldquo;Storage accounts must use HTTPS&rdquo;)</span></div>
@@ -5336,12 +6063,12 @@ $aiInsightsSectionHtml
         <div class="glossary-item"><span class="glossary-term">Regulatory</span><span class="glossary-def">A built-in initiative mapped to a compliance standard (e.g. CIS, NIST, PCI DSS, ISO 27001)</span></div>
         <div class="glossary-item"><span class="glossary-term">Non-Compliant (NC)</span><span class="glossary-def">A resource that violates one or more policy rules and needs remediation</span></div>
         <div class="glossary-item"><span class="glossary-term">Enforced (Default)</span><span class="glossary-def">Assignment enforcement mode is <code>Default</code> &mdash; Azure applies the policy effect (Deny blocks, Audit flags, DINE/Modify remediates)</span></div>
-        <div class="glossary-item"><span class="glossary-term">Audit Only (DoNotEnforce)</span><span class="glossary-def">Assignment enforcement mode is <code>DoNotEnforce</code> &mdash; Azure evaluates compliance but does NOT apply any effect. See <a href="https://learn.microsoft.com/en-us/azure/governance/policy/concepts/assignment-structure#enforcement-mode" target="_blank" style="color:var(--accent);">docs</a></span></div>
+        <div class="glossary-item"><span class="glossary-term">Enforcement disabled (DoNotEnforce)</span><span class="glossary-def">Assignment enforcement mode is <code>DoNotEnforce</code> &mdash; Azure evaluates compliance but does NOT apply any effect. See <a href="https://learn.microsoft.com/en-us/azure/governance/policy/concepts/assignment-structure#enforcement-mode" target="_blank" style="color:var(--accent);">docs</a></span></div>
         <div class="glossary-item"><span class="glossary-term">Management Group</span><span class="glossary-def">Top-level scope &mdash; policies here are inherited by all child subscriptions and resource groups</span></div>
         <div class="glossary-item"><span class="glossary-term">Deny</span><span class="glossary-def">Preventive effect &mdash; blocks the action entirely before it happens. See <a href="https://learn.microsoft.com/en-us/azure/governance/policy/concepts/effects#deny" target="_blank" style="color:var(--accent);">docs</a></span></div>
         <div class="glossary-item"><span class="glossary-term">Audit / AuditIfNotExists</span><span class="glossary-def">Detective effect &mdash; flags non-compliant resources but allows the action to proceed</span></div>
-        <div class="glossary-item"><span class="glossary-term">DeployIfNotExists (DINE)</span><span class="glossary-def">Remediation effect &mdash; automatically deploys missing configurations (e.g. diagnostic settings). See <a href="https://learn.microsoft.com/en-us/azure/governance/policy/concepts/effects#deployifnotexists" target="_blank" style="color:var(--accent);">docs</a></span></div>
-        <div class="glossary-item"><span class="glossary-term">Modify</span><span class="glossary-def">Remediation effect &mdash; automatically corrects resource properties at deployment time (e.g. adds required tags)</span></div>
+        <div class="glossary-item"><span class="glossary-term">DeployIfNotExists (DINE)</span><span class="glossary-def">Remediating effect that can deploy missing configurations when enforcement, identity, roles, scope, and evaluation prerequisites are satisfied. See <a href="https://learn.microsoft.com/en-us/azure/governance/policy/concepts/effects#deployifnotexists" target="_blank" style="color:var(--accent);">docs</a></span></div>
+        <div class="glossary-item"><span class="glossary-term">Modify</span><span class="glossary-def">Remediating effect that can correct resource properties when its prerequisites and applicable operations are satisfied</span></div>
         <div class="glossary-item"><span class="glossary-term">Parameterised</span><span class="glossary-def">Policy effect is defined via a parameter (e.g. <code>[parameters('effect')]</code>). The actual effect depends on the value assigned &mdash; most Azure built-in policies default to Audit</span></div>
         <div class="glossary-item"><span class="glossary-term">Disabled</span><span class="glossary-def">Policy effect is disabled &mdash; Azure does not evaluate resources against it. Counts as a governance gap. See <a href="https://learn.microsoft.com/en-us/azure/governance/policy/concepts/effects#disabled" target="_blank" style="color:var(--accent);">docs</a></span></div>
         <div class="glossary-item"><span class="glossary-term">Control Type Balance</span><span class="glossary-def">Distribution of Preventive (Deny), Detective (Audit), and Remediation (DINE/Modify) effects. Defence in depth requires all three. Suggested ranges in this tool are opinionated guidance, not official targets</span></div>
@@ -5350,13 +6077,15 @@ $aiInsightsSectionHtml
         <div class="glossary-item"><span class="glossary-term">CE / CE+ <span class="experimental-tag">Exp.</span></span><span class="glossary-def">Cyber Essentials / Cyber Essentials Plus &mdash; UK NCSC security certification scheme. CE/CE+ features in this tool are <strong>experimental</strong> and community-maintained; they are not official certification assessments</span></div>
         <div class="glossary-item"><span class="glossary-term">Risk Level</span><span class="glossary-def">Combined multi-signal assessment (0&ndash;100 point scale): adds Security Impact contribution, enforcement-gap penalty, active-enforcement bonus, and disabled penalty. Thresholds: &ge;40 High, &ge;20 Medium, &lt;20 Low</span></div>
         <div class="glossary-item"><span class="glossary-term">Security Impact</span><span class="glossary-def">Multi-signal score (0&ndash;100): effect type (&pm;35), category (&pm;15), name keywords (+10), enforcement multiplier (&times;0.65 if DoNotEnforce). Thresholds: &ge;75 High, &ge;40 Medium, &ge;15 Low, &lt;15 None</span></div>
-        <div class="glossary-item"><span class="glossary-term">Cost Impact</span><span class="glossary-def">Multi-signal score (0&ndash;100): effect &times; category matrix (&pm;45), parameterised &times; category (+5 to +30), name keywords (&pm;10). Thresholds: &ge;55 High, &ge;30 Medium, &lt;30 Low. Defender/Monitoring/Backup initiatives score higher due to licensing and ingestion costs</span></div>
+        <div class="glossary-item"><span class="glossary-term">Cost Exposure</span><span class="glossary-def">Qualitative Low/Medium/High heuristic based on effect, category, parameterisation, and policy-name signals. It is not a price estimate or measured spend.</span></div>
         <div class="glossary-item"><span class="glossary-term">Operational Overhead</span><span class="glossary-def">Management effort derived from effect type &times; category: DINE/Modify on infra = High, Deny = Medium (exception handling), Audit = Low. Parameterised initiatives use category inference: Security Center/Monitoring = High, Network/Compute = Medium, others = Low</span></div>
         <div class="glossary-item"><span class="glossary-term">Category</span><span class="glossary-def">The policy definition category from Azure metadata (e.g. Security Center, Network, Monitoring, Tags)</span></div>
         <div class="glossary-item"><span class="glossary-term">Scope</span><span class="glossary-def">The Azure hierarchy level where a policy is assigned: Management Group (inherited) &gt; Subscription &gt; Resource Group (most specific)</span></div>
         <div class="glossary-item"><span class="glossary-term">Delta Assessment</span><span class="glossary-def">Comparison between the current run and a previous YAML snapshot. Shows new, removed, and changed assignments, compliance drift, and exemption changes. Generate with <code>-Output YAML</code> and compare with <code>-DeltaYAML &lt;path&gt;</code></span></div>
     </div>
-</div>
+    </div>
+</details>
+</main>
 
 <!-- ── Footer ── -->
 <hr class="divider">
@@ -5367,19 +6096,54 @@ $aiInsightsSectionHtml
     &middot; Script v$ScriptVersion
 </p>
 
-<div class="disclaimer-banner" style="margin-top:8px;">
-    <span class="disclaimer-icon">&#x2139;&#xFE0F;</span>
-    <span><strong>Disclaimer:</strong> This project is made and maintained by Riccardo Pomato. It is a best-effort tool and is <strong>not an official Microsoft product</strong>. It is not affiliated with, endorsed by, or supported by Microsoft Corporation. All data is sourced from your Azure tenant via standard APIs and processed locally. Recommendations are heuristic-based and should be validated by qualified personnel. Use at your own discretion.</span>
-</div>
-
 </div><!-- /container -->
 
 <script>
-// ── Navigation highlight ──
-function setActive(el) {
-    document.querySelectorAll('#main-nav a').forEach(a => a.classList.remove('active'));
-    el.classList.add('active');
+function showPage(pageId, updateHash = true) {
+    const targetGroup = document.querySelector('[data-page-group="' + pageId + '"]') ? pageId : 'page-summary';
+    document.querySelectorAll('[data-report-page]').forEach(block => block.classList.toggle('active', block.dataset.pageGroup === targetGroup));
+    let activeLink = null;
+    document.querySelectorAll('#main-nav a[data-page]').forEach(link => {
+        const isActive = link.dataset.page === targetGroup;
+        link.classList.toggle('active', isActive);
+        if (isActive) activeLink = link;
+    });
+    if (activeLink) activeLink.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'center' });
+    if (updateHash) history.replaceState(null, '', '#' + targetGroup);
+    window.scrollTo({ top: 0, behavior: 'auto' });
 }
+
+function showPageForElement(element, updateHash = false) {
+    const block = element && element.closest('[data-report-page]');
+    if (block) showPage(block.dataset.pageGroup, updateHash);
+    return block;
+}
+
+document.querySelectorAll('#main-nav a[data-page]').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        showPage(link.dataset.page);
+    });
+});
+
+function routeHash() {
+    const target = document.querySelector(window.location.hash || '#page-summary');
+    if (!target) return showPage('page-summary', false);
+    const block = target.matches('[data-report-page]') ? target : target.closest('[data-report-page]');
+    if (block) showPage(block.dataset.pageGroup, false);
+    if (target !== block) {
+        let parentDetail = target.closest('details');
+        while (parentDetail) {
+            parentDetail.open = true;
+            parentDetail = parentDetail.parentElement && parentDetail.parentElement.closest('details');
+        }
+        target.scrollIntoView({ block: 'start' });
+    }
+}
+
+window.addEventListener('hashchange', routeHash);
+document.body.classList.add('pages-ready');
+routeHash();
 
 // ── Info Tooltip (JS-powered, immune to overflow clipping) ──
 (function() {
@@ -5412,14 +6176,15 @@ function setActive(el) {
 
 // Navigate to a section and open a specific details element
 function navigateTo(sectionId, detailsId) {
-    // Update active nav link
-    document.querySelectorAll('#main-nav a').forEach(a => {
-        a.classList.toggle('active', a.getAttribute('href') === '#' + sectionId);
-    });
-    // Scroll to section
     const section = document.getElementById(sectionId);
-    if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    // Open the target details element
+    if (section) {
+        showPageForElement(section);
+        const pageDetail = section.closest('.page-detail');
+        if (pageDetail) pageDetail.open = true;
+        const sectionDetail = section.querySelector(':scope > details.section-disclosure');
+        if (sectionDetail) sectionDetail.open = true;
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
     if (detailsId) {
         const details = document.getElementById(detailsId);
         if (details) {
@@ -5428,20 +6193,6 @@ function navigateTo(sectionId, detailsId) {
         }
     }
 }
-
-// Intersection Observer for auto-highlighting nav on scroll
-const sections = document.querySelectorAll('section[id]');
-const navLinks = document.querySelectorAll('#main-nav a');
-const observer = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-        if (entry.isIntersecting) {
-            navLinks.forEach(a => {
-                a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
-            });
-        }
-    });
-}, { rootMargin: '-80px 0px -60% 0px', threshold: 0 });
-sections.forEach(s => observer.observe(s));
 
 // ── Table filtering ──
 function filterTable(tableId, inputId) {
@@ -5498,6 +6249,7 @@ function sortTable(tableId, colIdx) {
 </html>
 "@
 
+    $html = $html.Replace('Audit Only', 'Enforcement Disabled').Replace('Audit-only', 'Enforcement disabled').Replace('audit-only', 'enforcement disabled')
     $html | Out-File -FilePath $OutputPath -Encoding utf8 -Force
 }
 
@@ -5515,15 +6267,191 @@ $Global:CEPGroupFriendlyNames = @{
     'Cyber_Essentials_v3.1_5' = 'Security Update Management'
 }
 
-function Invoke-CEPComplianceTests {
+function New-CEPAssessment {
+    param(
+        [Parameter(Mandatory)][bool]$Requested,
+        [Parameter(Mandatory)]
+        [ValidateSet('NotRequested', 'PrerequisiteUnavailable', 'PartiallyEvaluated', 'Evaluated', 'EvaluationFailed')]
+        [string]$State,
+        [ValidateSet('NotRequested', 'Pending', 'Available', 'Unavailable', 'Failed')]
+        [string]$MappingState = 'NotRequested',
+        [ValidateSet('NotRequested', 'Pending', 'PartiallyEvaluated', 'Evaluated', 'Failed')]
+        [string]$TestState = 'NotRequested',
+        [ValidateSet('NotMeasured', 'Measured')]
+        [string]$ScoreState = 'NotMeasured',
+        [AllowNull()][Nullable[double]]$Score = $null,
+        [string]$PrerequisiteReason = '',
+        [ValidateSet('NotRequested', 'Pending', 'Available', 'Renamed', 'RetiredOrUnavailable', 'Unavailable', 'DiscoveryFailed')]
+        [string]$MappingSourceState = 'NotRequested',
+        [string]$DefinitionId = '',
+        [string]$DefinitionVersion = '',
+        [string]$DefinitionDisplayName = '',
+        [string]$SelectionMethod = '',
+        [array]$CandidateDefinitions = @(),
+        $DataQuality = $null
+    )
+
+    if ($ScoreState -eq 'NotMeasured') { $Score = $null }
+    if ($null -eq $DataQuality) {
+        $DataQuality = [PSCustomObject][ordered]@{
+            State       = switch ($State) {
+                'NotRequested' { 'NotMeasured' }
+                'PrerequisiteUnavailable' { 'Unavailable' }
+                'PartiallyEvaluated' { 'Partial' }
+                'Evaluated' { 'Complete' }
+                'EvaluationFailed' { 'Failed' }
+            }
+            EvidenceCount = 0
+            Limitations = @(
+                if ($PrerequisiteReason) { $PrerequisiteReason }
+            )
+        }
+    }
+
+    return [PSCustomObject][ordered]@{
+        Requested          = $Requested
+        State              = $State
+        MappingState       = $MappingState
+        TestState          = $TestState
+        ScoreState         = $ScoreState
+        Score              = $Score
+        PrerequisiteReason = $PrerequisiteReason
+        MappingSourceState = $MappingSourceState
+        DefinitionId       = $DefinitionId
+        DefinitionVersion  = $DefinitionVersion
+        DefinitionDisplayName = $DefinitionDisplayName
+        SelectionMethod    = $SelectionMethod
+        CandidateDefinitions = @($CandidateDefinitions)
+        DataQuality        = $DataQuality
+    }
+}
+
+function Resolve-CEPMappingSource {
+    param(
+        [string]$DefinitionId = '',
+        [ValidateNotNullOrEmpty()][string]$DefinitionVersion = '3.1',
+        [AllowNull()][AllowEmptyCollection()][object[]]$Definitions = $null
+    )
+
+    $expectedDisplayName = "UK NCSC Cyber Essentials v$DefinitionVersion"
+    try {
+        if ($null -eq $Definitions) {
+            $Definitions = @(Get-AzPolicySetDefinition -BuiltIn -ErrorAction Stop)
+        }
+    } catch {
+        $diagnosticMessage = [string]$_.Exception.Message
+        $safeMessage = if ($diagnosticMessage -match '(?i)InvalidAuthenticationTokenTenant|access token is from the wrong issuer') {
+            'Azure Policy definition discovery could not run because the active Azure token tenant does not match the subscription tenant. Reauthenticate against a tenant associated with the subscription and rerun the assessment.'
+        } else {
+            'Azure Policy built-in definition discovery failed. Review the console diagnostic and rerun the assessment.'
+        }
+        return [PSCustomObject][ordered]@{
+            State = 'DiscoveryFailed'; Definition = $null; SelectionMethod = ''
+            ExpectedDisplayName = $expectedDisplayName; ConfiguredId = $DefinitionId; ConfiguredVersion = $DefinitionVersion
+            Candidates = @(); Message = $safeMessage; DiagnosticMessage = $diagnosticMessage
+        }
+    }
+
+    $definitionRecords = @($Definitions | ForEach-Object {
+        $resourceId = if ($_.ResourceId) { [string]$_.ResourceId } elseif ($_.Id) { [string]$_.Id } else { '' }
+        $name = [string]$_.Name
+        $displayName = [string]$_.DisplayName
+        $metadata = if ($_.Metadata) { $_.Metadata } elseif ($_.Properties.Metadata) { $_.Properties.Metadata } else { $null }
+        [PSCustomObject][ordered]@{
+            Definition = $_
+            Id = $resourceId
+            Name = $name
+            DisplayName = $displayName
+            Version = if ($metadata -and $metadata.version) { [string]$metadata.version } else { '' }
+        }
+    })
+    $candidates = @($definitionRecords | Where-Object { $_.DisplayName -match '(?i)Cyber Essentials' } | ForEach-Object {
+        [PSCustomObject][ordered]@{ Id = $_.Id; Name = $_.Name; DisplayName = $_.DisplayName; Version = $_.Version }
+    })
+
+    $selected = $null
+    $selectionMethod = ''
+    if (-not [string]::IsNullOrWhiteSpace($DefinitionId)) {
+        $configuredLeaf = ($DefinitionId.TrimEnd('/') -split '/')[-1]
+        $selected = $definitionRecords | Where-Object {
+            [string]::Equals($_.Id, $DefinitionId, [System.StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals($_.Name, $configuredLeaf, [System.StringComparison]::OrdinalIgnoreCase)
+        } | Select-Object -First 1
+        if ($selected) { $selectionMethod = 'DefinitionId' }
+    }
+
+    if (-not $selected) {
+        $selected = $definitionRecords | Where-Object {
+            [string]::Equals($_.DisplayName, $expectedDisplayName, [System.StringComparison]::OrdinalIgnoreCase)
+        } | Select-Object -First 1
+        if ($selected) { $selectionMethod = 'ExactDisplayName' }
+    }
+
+    if ($selected) {
+        $message = if ($selectionMethod -eq 'DefinitionId') {
+            "Azure Policy mapping source resolved by configured definition ID '$DefinitionId'."
+        } elseif ($DefinitionId) {
+            "Configured definition ID '$DefinitionId' was not returned; exact display-name fallback resolved '$expectedDisplayName'."
+        } else {
+            "Azure Policy mapping source resolved by exact display name '$expectedDisplayName'."
+        }
+        return [PSCustomObject][ordered]@{
+            State = 'Available'; Definition = $selected.Definition; SelectionMethod = $selectionMethod
+            ExpectedDisplayName = $expectedDisplayName; ConfiguredId = $DefinitionId; ConfiguredVersion = $DefinitionVersion
+            Candidates = $candidates; Message = $message
+        }
+    }
+
+    if ($candidates.Count -gt 0) {
+        $state = 'Renamed'
+        $message = "Expected Azure Policy mapping source '$expectedDisplayName' was not matched exactly; candidate Cyber Essentials definitions were discovered and require explicit selection."
+    } elseif ($DefinitionId) {
+        $state = 'RetiredOrUnavailable'
+        $message = "Configured CE mapping definition ID '$DefinitionId' was not returned and no Cyber Essentials candidates were discovered; the source may be retired or unavailable."
+    } else {
+        $state = 'Unavailable'
+        $message = "Azure Policy mapping source '$expectedDisplayName' and candidate Cyber Essentials definitions were not returned by built-in definition discovery."
+    }
+
+    [PSCustomObject][ordered]@{
+        State = $state; Definition = $null; SelectionMethod = ''
+        ExpectedDisplayName = $expectedDisplayName; ConfiguredId = $DefinitionId; ConfiguredVersion = $DefinitionVersion
+        Candidates = $candidates; Message = $message
+    }
+}
+
+function Get-CEPScore {
+    param(
+        [array]$TestResults = @(),
+        [switch]$MeasurementBlocked
+    )
+
+    $technicalVerdicts = @($TestResults | Where-Object {
+        $_.'Test #' -match '^TC[1-5]$' -and $_.Status -in @('PASS', 'FAIL')
+    })
+    $passCount = @($technicalVerdicts | Where-Object Status -eq 'PASS').Count
+    $failCount = @($technicalVerdicts | Where-Object Status -eq 'FAIL').Count
+    $denominator = $passCount + $failCount
+    $isMeasured = -not $MeasurementBlocked -and $denominator -gt 0
+
+    return [PSCustomObject][ordered]@{
+        Pass        = $passCount
+        Fail        = $failCount
+        Denominator = $denominator
+        ScoreState  = if ($isMeasured) { 'Measured' } else { 'NotMeasured' }
+        Score       = if ($isMeasured) { [math]::Round(($passCount / $denominator) * 100, 1) } else { $null }
+    }
+}
+
+function Invoke-CEPInitiativeAssessment {
     <#
     .SYNOPSIS
-        Runs Cyber Essentials compliance evaluation tests against the CE v3.1 initiative
-        and the CE+ v3.2 test specification.
+        Runs Azure Policy mapping against the UK NCSC Cyber Essentials v3.1 initiative
+        and independent technical checks against the NCSC CE+ v3.2 test specification.
     .DESCRIPTION
         This function performs two phases:
         Phase 1 — Initiative Compliance (Tests T1-T5+):
-            1. Verifies the CE v3.1 initiative exists in the tenant
+            1. Verifies the Azure Policy mapping source (UK NCSC Cyber Essentials v3.1) exists in the tenant
             2. Checks the initiative is assigned at an appropriate scope
             3. Optionally triggers an on-demand compliance scan
             4. Queries per-policy compliance state from Azure Resource Graph
@@ -5550,14 +6478,18 @@ function Invoke-CEPComplianceTests {
         [switch]$TriggerScan,
         
         [Parameter(Mandatory=$false)]
-        [switch]$ExportResults
+        [switch]$ExportResults,
+
+        [string]$DefinitionId = '',
+
+        [ValidateNotNullOrEmpty()][string]$DefinitionVersion = '3.1'
     )
     
     Write-Host ""
     Write-Host "   ═══════════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
     Write-Host "     CYBER ESSENTIALS — COMPLIANCE EVALUATION TESTS (CE & CE+)" -ForegroundColor Magenta
-    Write-Host "     Initiative : UK NCSC Cyber Essentials v3.1" -ForegroundColor White
-    Write-Host "     Test Spec  : CE+ v3.2 Test Specification" -ForegroundColor White
+    Write-Host "     Policy Map : UK NCSC Cyber Essentials v3.1 initiative" -ForegroundColor White
+    Write-Host "     Test Spec  : NCSC CE+ v3.2 Test Specification" -ForegroundColor White
     Write-Host "     " -NoNewline; Write-Host "⚠️  EXPERIMENTAL — Results may not be 100% accurate" -ForegroundColor Yellow
     Write-Host "   ═══════════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
     Write-Host ""
@@ -5569,6 +6501,7 @@ function Invoke-CEPComplianceTests {
     $warnCount = 0
     $skipCount = 0
     $manualCount = 0
+    $cepAssessment = New-CEPAssessment -Requested $true -State PartiallyEvaluated -MappingState Pending -TestState Pending
     
     # ─── Helper to record a test result ───
     function Add-TestResult {
@@ -5598,38 +6531,45 @@ function Invoke-CEPComplianceTests {
     # TEST 1: Initiative Definition Exists
     # ═══════════════════════════════════════════════════════
     $testNumber++
-    Write-Host "   TEST $testNumber : CE v3.1 Initiative Definition Exists" -ForegroundColor White -NoNewline
+    Write-Host "   TEST $testNumber : Azure Policy CE Mapping Source Exists" -ForegroundColor White -NoNewline
     
-    $ceInitiative = $null
-    try {
-        Write-Progress -Activity "CE Compliance Tests" -Status "Fetching built-in policy set definitions..." -PercentComplete 5 -Id 20
-        $builtInSets = Get-AzPolicySetDefinition -BuiltIn -ErrorAction Stop
-        Write-Progress -Activity "CE Compliance Tests" -Status "Searching for CE v3.1 initiative..." -PercentComplete 10 -Id 20
-        $ceInitiative = $builtInSets | Where-Object { 
-            $_.DisplayName -like "*Cyber Essentials*v3*"
-        } | Select-Object -First 1
-        
-        if (-not $ceInitiative) {
-            $ceInitiative = $builtInSets | Where-Object { 
-                $_.DisplayName -like "*Cyber Essentials*"
-            } | Sort-Object DisplayName -Descending | Select-Object -First 1
-        }
-    } catch { }
+    Write-Progress -Activity "CE Compliance Tests" -Status "Resolving CE mapping source..." -PercentComplete 5 -Id 20
+    $sourceResolution = Resolve-CEPMappingSource -DefinitionId $DefinitionId -DefinitionVersion $DefinitionVersion
+    $ceInitiative = $sourceResolution.Definition
     
     if ($ceInitiative) {
         Write-Host " [PASS]" -ForegroundColor Green
-        Write-Host "         Found: $($ceInitiative.DisplayName)" -ForegroundColor DarkGray
+        Write-Host "         Found: $($ceInitiative.DisplayName) via $($sourceResolution.SelectionMethod)" -ForegroundColor DarkGray
         $passCount++
-        Add-TestResult -TestId "T$testNumber" -ControlGroup "Prerequisites" -TestName "CE v3.1 Initiative Definition Exists" -Status "PASS" -Details "Found: $($ceInitiative.DisplayName)"
+        Add-TestResult -TestId "T$testNumber" -ControlGroup "Prerequisites" -TestName "Azure Policy CE Mapping Source Exists" -Status "PASS" -Details "$($sourceResolution.Message) Found: $($ceInitiative.DisplayName)"
     } else {
-        Write-Host " [FAIL]" -ForegroundColor Red
-        Write-Host "         The built-in 'UK NCSC Cyber Essentials v3.1' initiative was not found." -ForegroundColor Red
-        $failCount++
-        Add-TestResult -TestId "T$testNumber" -ControlGroup "Prerequisites" -TestName "CE v3.1 Initiative Definition Exists" -Status "FAIL" -Details "Initiative not found in tenant"
+        Write-Host " [SKIP]" -ForegroundColor DarkGray
+        Write-Host "         $($sourceResolution.Message)" -ForegroundColor Yellow
+        if ($sourceResolution.DiagnosticMessage) {
+            Write-Host "         Diagnostic: $($sourceResolution.DiagnosticMessage)" -ForegroundColor DarkGray
+        }
+        if ($sourceResolution.Candidates.Count -gt 0) {
+            Write-Host "         Candidate definitions:" -ForegroundColor DarkGray
+            $sourceResolution.Candidates | ForEach-Object { Write-Host "           • $($_.DisplayName) [$($_.Name)]" -ForegroundColor DarkGray }
+        }
+        $skipCount++
+        Add-TestResult -TestId "T$testNumber" -ControlGroup "Prerequisites" -TestName "Azure Policy CE Mapping Source Exists" -Status "SKIP" -Details "$($sourceResolution.Message) Azure Policy mapping was not evaluated."
+        $mappingFailed = $sourceResolution.State -eq 'DiscoveryFailed'
+        $cepAssessment = New-CEPAssessment `
+            -Requested $true `
+            -State $(if ($mappingFailed) { 'EvaluationFailed' } else { 'PrerequisiteUnavailable' }) `
+            -MappingState $(if ($mappingFailed) { 'Failed' } else { 'Unavailable' }) `
+            -TestState PartiallyEvaluated `
+            -ScoreState NotMeasured `
+            -PrerequisiteReason $sourceResolution.Message `
+            -MappingSourceState $sourceResolution.State `
+            -DefinitionId $sourceResolution.ConfiguredId `
+            -DefinitionVersion $sourceResolution.ConfiguredVersion `
+            -DefinitionDisplayName $sourceResolution.ExpectedDisplayName `
+            -CandidateDefinitions $sourceResolution.Candidates
         
-        # Cannot continue without the initiative
-        Write-Host "`n   ❌ Cannot run remaining tests without the initiative definition." -ForegroundColor Red
-        return @{ TestResults = $testResults; PerScopeData = @(); PerScopeGroupData = @{}; PerScopeGroupRaw = @{}; RefIdToGroupDisplay = @{} }
+        Write-Host "`n   Mapping phase blocked; independent CE+ technical tests will continue." -ForegroundColor Yellow
+        return @{ Assessment = $cepAssessment; TestResults = $testResults; NextTestNumber = $testNumber; PerScopeData = @(); PerScopeGroupData = @{}; PerScopeGroupRaw = @{}; RefIdToGroupDisplay = @{} }
     }
     
     $ceInitiativeName = $ceInitiative.Name
@@ -5676,7 +6616,7 @@ function Invoke-CEPComplianceTests {
             $auditOnlyCount = @($ceAssignments | Where-Object { $_.enforcementMode -eq 'DoNotEnforce' }).Count
             Write-Host ""
             Write-Host "         ℹ️  MULTI-ASSIGNMENT DETECTED: $($ceAssignments.Count) assignments found" -ForegroundColor Cyan
-            Write-Host "            Enforced: $enforcedCount | Audit-only (DoNotEnforce): $auditOnlyCount" -ForegroundColor Cyan
+            Write-Host "            Enforced: $enforcedCount | Enforcement disabled (DoNotEnforce): $auditOnlyCount" -ForegroundColor Cyan
             Write-Host "            Compliance data will be deduplicated using strictest-state-wins per resource." -ForegroundColor DarkGray
             Write-Host "            This prevents double-counting when the same resource is evaluated by overlapping scopes." -ForegroundColor DarkGray
         }
@@ -6189,6 +7129,92 @@ policyresources
             -Details "$groupPass passed | $groupWarn warnings | $groupFail failed | $groupSkip skipped — $($groupPolicies.Count) policies evaluated" `
             -NonCompliant $groupNonCompliant -Compliant $groupCompliant -Total $groupTotal
     }
+
+    $perScopeData = @()
+    if ($perScopeCompliance.Count -gt 0 -and $ceAssignments.Count -gt 1) {
+        foreach ($assignment in $ceAssignments) {
+            $assignmentId = $assignment.assignmentId.ToLower()
+            $scopeData = if ($perScopeCompliance.ContainsKey($assignmentId)) { $perScopeCompliance[$assignmentId] } else { $null }
+            $perScopeData += [PSCustomObject]@{
+                AssignmentId    = $assignmentId
+                DisplayName     = $assignment.displayName
+                ScopeType       = $assignment.scopeType
+                EnforcementMode = $assignment.enforcementMode
+                Total           = if ($scopeData) { [int]$scopeData.Total } else { 0 }
+                Compliant       = if ($scopeData) { [int]$scopeData.Compliant } else { 0 }
+                NonCompliant    = if ($scopeData) { [int]$scopeData.NonCompliant } else { 0 }
+                Exempt          = if ($scopeData) { [int]$scopeData.Exempt } else { 0 }
+                CompliancePct   = if ($scopeData -and [int]$scopeData.Total -gt 0) { [math]::Round(([int]$scopeData.Compliant / [int]$scopeData.Total) * 100, 1) } else { 0 }
+            }
+        }
+    }
+
+    $mappingState = if ($warnCount -gt 0 -or $skipCount -gt 0) { 'PartiallyEvaluated' } else { 'Evaluated' }
+    $cepAssessment = New-CEPAssessment `
+        -Requested $true `
+        -State $mappingState `
+        -MappingState Available `
+        -TestState NotRequested `
+        -MappingSourceState Available `
+        -DefinitionId $(if ($ceInitiative.ResourceId) { $ceInitiative.ResourceId } elseif ($ceInitiative.Id) { $ceInitiative.Id } else { $ceInitiative.Name }) `
+        -DefinitionVersion $sourceResolution.ConfiguredVersion `
+        -DefinitionDisplayName $ceInitiative.DisplayName `
+        -SelectionMethod $sourceResolution.SelectionMethod `
+        -CandidateDefinitions $sourceResolution.Candidates
+
+    return @{
+        Assessment = $cepAssessment
+        TestResults = $testResults
+        NextTestNumber = $testNumber
+        PerScopeData = $perScopeData
+        PerScopeGroupData = if ($perScopeGroupData) { $perScopeGroupData } else { @{} }
+        PerScopeGroupRaw = if ($perScopeGroupRaw) { $perScopeGroupRaw } else { @{} }
+        RefIdToGroupDisplay = if ($refIdToGroupDisplay) { $refIdToGroupDisplay } else { @{} }
+    }
+}
+
+function Invoke-CEPPlusTechnicalAssessment {
+    param(
+        [Parameter(Mandatory)][object[]]$PolicyAssignments,
+        [int]$StartTestNumber = 0
+    )
+
+    $testResults = [System.Collections.ArrayList]@()
+    $testNumber = $StartTestNumber
+    $passCount = 0
+    $failCount = 0
+    $warnCount = 0
+    $skipCount = 0
+    $manualCount = 0
+
+    function Add-TestResult {
+        param(
+            [string]$TestId,
+            [string]$ControlGroup,
+            [string]$TestName,
+            [string]$Status,
+            [string]$Details,
+            [int]$NonCompliant = 0,
+            [int]$Compliant = 0,
+            [int]$Total = 0,
+            [string]$EvidenceType = '',
+            [string]$Source = '',
+            [string]$Query = ''
+        )
+        [void]$testResults.Add([PSCustomObject]@{
+            'Test #'          = $TestId
+            'Control Group'   = $ControlGroup
+            'Test Name'       = $TestName
+            'Status'          = $Status
+            'Details'         = $Details
+            'Non-Compliant'   = $NonCompliant
+            'Compliant'       = $Compliant
+            'Total Resources' = $Total
+            'Evidence Type'    = $EvidenceType
+            'Source'           = $Source
+            'Query'            = $Query
+        })
+    }
     
     # ═══════════════════════════════════════════════════════════════════════════════
     #  PHASE 2 — CE+ v3.2 TEST SPECIFICATION
@@ -6213,10 +7239,11 @@ policyresources
     Write-Host "   TEST $testNumber : TC1 — Remote Vulnerability Assessment" -ForegroundColor White
     Write-Progress -Activity "CE+ v3.2 Tests" -Status "TC1: Remote Vulnerability Assessment..." -PercentComplete 5 -Id 21
     
-    $tc1Pass = 0; $tc1Fail = 0; $tc1Warn = 0; $tc1Manual = 0
+    $tc1Pass = 0; $tc1Fail = 0; $tc1Warn = 0; $tc1Skip = 0; $tc1Manual = 0
     
     # --- TC1.1: Identify Public IP Addresses ---
     Write-Host "         1.1 Identify Public IP Addresses" -ForegroundColor White -NoNewline
+    $tc11Status = 'WARN'; $tc11Details = 'The Azure Resource Graph query did not complete.'
     try {
         $publicIpQuery = @"
 resources
@@ -6237,20 +7264,25 @@ resources
             if ($unassociated -gt 0) {
                 Write-Host "           ⚠ Unassociated public IPs should be removed if not needed" -ForegroundColor Yellow
             }
+            $tc11Status = 'PASS'; $tc11Details = "Found $totalPubIps public IP addresses; $unassociated are unassociated and require necessity review."
             $tc1Pass++
         } else {
             Write-Host " [PASS]" -ForegroundColor Green
             Write-Host "           No public IP addresses found in the environment" -ForegroundColor DarkGray
+            $tc11Status = 'PASS'; $tc11Details = 'No public IP addresses were returned by Azure Resource Graph.'
             $tc1Pass++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query public IPs: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc11Details = "Public IP query failed: $($_.Exception.Message)"
         $tc1Warn++
     }
+    Add-TestResult -TestId 'TC1.1' -ControlGroup 'TC1: Vulnerability' -TestName 'Public IP Address Inventory' -Status $tc11Status -Details $tc11Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: resources/public IP addresses' -Query $publicIpQuery
     
     # --- TC1.2: Scan for open management ports from Internet ---
     Write-Host "         1.2 Evaluate Open Management Ports from Internet" -ForegroundColor White -NoNewline
+    $tc12Status = 'WARN'; $tc12Details = 'The Azure Resource Graph query did not complete.'
     try {
         $nsgRulesQuery = @"
 resources
@@ -6274,53 +7306,68 @@ resources
             Write-Host " [FAIL]" -ForegroundColor Red
             Write-Host "           $($nsgResults[0].DangerousRules) NSG rules allow management ports (SSH/RDP/SMB/WinRM) from Internet" -ForegroundColor Red
             Write-Host "           Across $($nsgResults[0].AffectedNSGs) NSGs — these MUST be restricted" -ForegroundColor Red
+            $tc12Status = 'FAIL'; $tc12Details = "$($nsgResults[0].DangerousRules) inbound NSG rules expose management ports across $($nsgResults[0].AffectedNSGs) NSGs."
             $tc1Fail++
         } else {
             Write-Host " [PASS]" -ForegroundColor Green
             Write-Host "           No NSG rules expose management ports to the Internet" -ForegroundColor DarkGray
+            $tc12Status = 'PASS'; $tc12Details = 'No inbound NSG rules exposing the evaluated management ports to the Internet were found.'
             $tc1Pass++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query NSG rules: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc12Details = "NSG rule query failed: $($_.Exception.Message)"
         $tc1Warn++
     }
+    Add-TestResult -TestId 'TC1.2' -ControlGroup 'TC1: Vulnerability' -TestName 'Internet-Exposed Management Ports' -Status $tc12Status -Details $tc12Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: resources/network security groups' -Query $nsgRulesQuery
     
     # --- TC1.3: Evaluate high-risk vulnerabilities (Defender for Cloud) ---
     Write-Host "         1.3 Evaluate High-Risk Vulnerabilities (Defender)" -ForegroundColor White -NoNewline
+    $tc13Status = 'WARN'; $tc13Details = 'The Azure Resource Graph query did not complete.'
     try {
         $vulnQuery = @"
 securityresources
 | where type == 'microsoft.security/assessments'
-| where properties.status.code == 'Unhealthy'
 | extend severity = tostring(properties.metadata.severity),
-         category = tostring(properties.metadata.categories[0])
-| where severity in ('High', 'Critical')
-| summarize HighSevFindings = count(),
-            CriticalFindings = countif(severity == 'Critical'),
-            HighFindings = countif(severity == 'High')
+     category = tostring(properties.metadata.categories[0]),
+     statusCode = tostring(properties.status.code)
+| summarize CoverageCount = count(),
+        HighSevFindings = countif(statusCode == 'Unhealthy' and severity in ('High', 'Critical')),
+        CriticalFindings = countif(statusCode == 'Unhealthy' and severity == 'Critical'),
+        HighFindings = countif(statusCode == 'Unhealthy' and severity == 'High')
 "@
         $vulnResults = @(Search-AzGraph -Query $vulnQuery -First 1 -UseTenantScope | Expand-AzGraphResult)
-        if ($vulnResults.Count -gt 0 -and $vulnResults[0].HighSevFindings -gt 0) {
+    if ($vulnResults.Count -eq 0 -or $vulnResults[0].CoverageCount -eq 0) {
+        Write-Host " [SKIP]" -ForegroundColor DarkYellow
+        Write-Host "           No Defender for Cloud assessment coverage was returned" -ForegroundColor DarkYellow
+        $tc13Status = 'SKIP'; $tc13Details = 'No Defender for Cloud assessments were available to establish vulnerability coverage.'
+        $tc1Skip++
+    } elseif ($vulnResults[0].HighSevFindings -gt 0) {
             $critical = $vulnResults[0].CriticalFindings
             $high = $vulnResults[0].HighFindings
             Write-Host " [FAIL]" -ForegroundColor Red
             Write-Host "           Critical: $critical | High: $high — unresolved Defender for Cloud findings" -ForegroundColor Red
             Write-Host "           All high/critical findings must be remediated for CE+ certification" -ForegroundColor DarkRed
+            $tc13Status = 'FAIL'; $tc13Details = "$critical critical and $high high-severity unhealthy Defender for Cloud assessments were found."
             $tc1Fail++
         } else {
             Write-Host " [PASS]" -ForegroundColor Green
             Write-Host "           No high or critical severity Defender for Cloud findings" -ForegroundColor DarkGray
+            $tc13Status = 'PASS'; $tc13Details = 'No high or critical unhealthy Defender for Cloud assessments were returned.'
             $tc1Pass++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query security assessments: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc13Details = "Defender assessment query failed: $($_.Exception.Message)"
         $tc1Warn++
     }
+    Add-TestResult -TestId 'TC1.3' -ControlGroup 'TC1: Vulnerability' -TestName 'High-Risk Defender Vulnerabilities' -Status $tc13Status -Details $tc13Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: securityresources/assessments' -Query $vulnQuery
     
     # --- TC1.4: Evaluate public/anonymous access on storage ---
     Write-Host "         1.4 Evaluate Public/Anonymous Storage Access" -ForegroundColor White -NoNewline
+    $tc14Status = 'WARN'; $tc14Details = 'The Azure Resource Graph query did not complete.'
     try {
         $storageQuery = @"
 resources
@@ -6335,31 +7382,42 @@ resources
 "@
         $storageResults = @(Search-AzGraph -Query $storageQuery -First 1 -UseTenantScope | Expand-AzGraphResult)
         if ($storageResults.Count -gt 0) {
+            $totalAccounts = [int]$storageResults[0].TotalAccounts
             $pubAccess = $storageResults[0].PublicAccessEnabled
             $noHttps = $storageResults[0].NotHttpsOnly
             $oldTls = $storageResults[0].OldTls
             $issues = $pubAccess + $noHttps + $oldTls
-            if ($issues -gt 0) {
+            if ($totalAccounts -eq 0) {
+                Write-Host " [SKIP]" -ForegroundColor DarkYellow
+                Write-Host "           No storage accounts in scope" -ForegroundColor DarkGray
+                $tc14Status = 'SKIP'; $tc14Details = 'No storage accounts were found in scope; the configuration check is not applicable.'
+                $tc1Skip++
+            } elseif ($issues -gt 0) {
                 Write-Host " [FAIL]" -ForegroundColor Red
                 if ($pubAccess -gt 0) { Write-Host "           $pubAccess storage accounts allow public blob access" -ForegroundColor Red }
                 if ($noHttps -gt 0) { Write-Host "           $noHttps storage accounts do not enforce HTTPS" -ForegroundColor Red }
                 if ($oldTls -gt 0) { Write-Host "           $oldTls storage accounts use TLS version below 1.2" -ForegroundColor Red }
+                $tc14Status = 'FAIL'; $tc14Details = "$pubAccess accounts allow public blob access; $noHttps do not enforce HTTPS; $oldTls use TLS below 1.2."
                 $tc1Fail++
             } else {
                 Write-Host " [PASS]" -ForegroundColor Green
-                Write-Host "           All $($storageResults[0].TotalAccounts) storage accounts: no public access, HTTPS enforced, TLS 1.2+" -ForegroundColor DarkGray
+                Write-Host "           All $totalAccounts storage accounts: no public access, HTTPS enforced, TLS 1.2+" -ForegroundColor DarkGray
+                $tc14Status = 'PASS'; $tc14Details = "All $totalAccounts storage accounts disable public blob access, enforce HTTPS, and use TLS 1.2 or later."
                 $tc1Pass++
             }
         } else {
-            Write-Host " [PASS]" -ForegroundColor Green
-            Write-Host "           No storage accounts found" -ForegroundColor DarkGray
-            $tc1Pass++
+            Write-Host " [SKIP]" -ForegroundColor DarkYellow
+            Write-Host "           No storage accounts in scope" -ForegroundColor DarkGray
+            $tc14Status = 'SKIP'; $tc14Details = 'No storage accounts were found in scope; the configuration check is not applicable.'
+            $tc1Skip++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query storage accounts: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc14Details = "Storage configuration query failed: $($_.Exception.Message)"
         $tc1Warn++
     }
+    Add-TestResult -TestId 'TC1.4' -ControlGroup 'TC1: Vulnerability' -TestName 'Public and Anonymous Storage Access' -Status $tc14Status -Details $tc14Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: resources/storage accounts' -Query $storageQuery
     
     # --- TC1.5: Evaluate authentication and account lockout (Manual) ---
     Write-Host "         1.5 Evaluate Account Lockout & Login Throttling" -ForegroundColor White -NoNewline
@@ -6383,14 +7441,14 @@ resources
     Add-TestResult -TestId "TC1.6" -ControlGroup "TC1: Vulnerability" -TestName "External Vulnerability Scan with Approved Scanner" -Status "MANUAL" -Details "Scan all public IPs with CE+ approved scanner, check TCP/UDP ports"
     
     # TC1 Verdict
-    $tc1Verdict = if ($tc1Fail -gt 0) { "FAIL" } elseif ($tc1Warn -gt 0) { "WARN" } elseif ($tc1Manual -gt 0 -and $tc1Pass -eq 0) { "MANUAL" } else { "PASS" }
+    $tc1Verdict = if ($tc1Fail -gt 0) { "FAIL" } elseif ($tc1Warn -gt 0 -or $tc1Skip -gt 0) { "WARN" } elseif ($tc1Manual -gt 0 -and $tc1Pass -eq 0) { "MANUAL" } else { "PASS" }
     $tc1VerdictColor = switch ($tc1Verdict) { "PASS" { "Green" } "FAIL" { "Red" } "WARN" { "Yellow" } "MANUAL" { "DarkYellow" } default { "DarkGray" } }
     Write-Host "         ─────────────────────────────────────" -ForegroundColor DarkGray
-    Write-Host "         TC1 Result: [$tc1Verdict] — ✓ $tc1Pass | ✗ $tc1Fail | ⚠ $tc1Warn | ✋ $tc1Manual manual" -ForegroundColor $tc1VerdictColor
+    Write-Host "         TC1 Result: [$tc1Verdict] — ✓ $tc1Pass | ✗ $tc1Fail | ⚠ $tc1Warn | ↷ $tc1Skip skipped | ✋ $tc1Manual manual" -ForegroundColor $tc1VerdictColor
     Write-Host ""
     switch ($tc1Verdict) { "PASS" { $passCount++ } "FAIL" { $failCount++ } "WARN" { $warnCount++ } "MANUAL" { $manualCount++ } }
     Add-TestResult -TestId "TC1" -ControlGroup "CE+ v3.2 Spec" -TestName "TC1: Remote Vulnerability Assessment" -Status $tc1Verdict `
-        -Details "$tc1Pass passed | $tc1Fail failed | $tc1Warn warnings | 🤚 $tc1Manual manual subtests"
+        -Details "$tc1Pass passed | $tc1Fail failed | $tc1Warn warnings | $tc1Skip skipped | 🤚 $tc1Manual manual subtests"
     
     # ═══════════════════════════════════════════════════════
     # TC2: Patching / Authenticated Scan (Test Case 2)
@@ -6400,39 +7458,51 @@ resources
     Write-Host "   TEST $testNumber : TC2 — Patching & Authenticated Vulnerability Scan" -ForegroundColor White
     Write-Progress -Activity "CE+ v3.2 Tests" -Status "TC2: Patching / Authenticated Scan..." -PercentComplete 25 -Id 21
     
-    $tc2Pass = 0; $tc2Fail = 0; $tc2Warn = 0; $tc2Manual = 0
+    $tc2Pass = 0; $tc2Fail = 0; $tc2Warn = 0; $tc2Skip = 0; $tc2Manual = 0
     
     # --- TC2.1: Check for missing critical/high patches (system updates) ---
     Write-Host "         2.1 Missing Critical/High Security Updates" -ForegroundColor White -NoNewline
+    $tc21Status = 'WARN'; $tc21Details = 'The Azure Resource Graph query did not complete.'
     try {
         $patchQuery = @"
 securityresources
 | where type == 'microsoft.security/assessments'
-| where properties.status.code == 'Unhealthy'
-| where properties.metadata.severity in ('High', 'Critical')
-| where properties.displayName has_any ('system updates', 'update', 'patch', 'missing')
-| summarize MissingPatches = count(),
-            AffectedResources = dcount(tostring(properties.resourceDetails.Id))
+| extend isPatchAssessment = properties.displayName has_any ('system updates', 'update', 'patch', 'missing'),
+     statusCode = tostring(properties.status.code),
+     severity = tostring(properties.metadata.severity)
+| summarize CoverageCount = countif(isPatchAssessment),
+        MissingPatches = countif(isPatchAssessment and statusCode == 'Unhealthy' and severity in ('High', 'Critical')),
+        AffectedResources = dcountif(tostring(properties.resourceDetails.Id), isPatchAssessment and statusCode == 'Unhealthy' and severity in ('High', 'Critical'))
 "@
         $patchResults = @(Search-AzGraph -Query $patchQuery -First 1 -UseTenantScope | Expand-AzGraphResult)
-        if ($patchResults.Count -gt 0 -and $patchResults[0].MissingPatches -gt 0) {
+    if ($patchResults.Count -eq 0 -or $patchResults[0].CoverageCount -eq 0) {
+        Write-Host " [SKIP]" -ForegroundColor DarkYellow
+        Write-Host "           No applicable Defender patch assessments were returned" -ForegroundColor DarkYellow
+        $tc21Status = 'SKIP'; $tc21Details = 'No applicable Defender patch assessments were available to establish update coverage.'
+        $tc2Skip++
+    } elseif ($patchResults[0].MissingPatches -gt 0) {
             Write-Host " [FAIL]" -ForegroundColor Red
             Write-Host "           $($patchResults[0].MissingPatches) critical/high patch findings across $($patchResults[0].AffectedResources) resources" -ForegroundColor Red
             Write-Host "           CE+ requires critical/high patches applied within 14 days of vendor release" -ForegroundColor DarkRed
+            $tc21Status = 'FAIL'; $tc21Details = "$($patchResults[0].MissingPatches) critical or high patch findings affect $($patchResults[0].AffectedResources) resources."
             $tc2Fail++
         } else {
             Write-Host " [PASS]" -ForegroundColor Green
             Write-Host "           No missing critical/high security update findings in Defender for Cloud" -ForegroundColor DarkGray
+            $tc21Status = 'PASS'; $tc21Details = 'No unhealthy critical or high patch assessments were returned by Defender for Cloud.'
             $tc2Pass++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query patch status: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc21Details = "Patch assessment query failed: $($_.Exception.Message)"
         $tc2Warn++
     }
+    Add-TestResult -TestId 'TC2.1' -ControlGroup 'TC2: Patching' -TestName 'Missing Critical or High Security Updates' -Status $tc21Status -Details $tc21Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: securityresources/assessments' -Query $patchQuery
     
     # --- TC2.2: Check for CVSS >= 7.0 vulnerabilities ---
     Write-Host "         2.2 CVSS 7.0+ Vulnerabilities" -ForegroundColor White -NoNewline
+    $tc22Status = 'WARN'; $tc22Details = 'The Azure Resource Graph query did not complete.'
     try {
         $cvssQuery = @"
 securityresources
@@ -6440,58 +7510,78 @@ securityresources
 | extend cvssScore = todouble(properties.additionalData.cvss.base),
          patchable = tobool(properties.status.cause == 'Patchable' or properties.remediation != ''),
          severity = tostring(properties.status.severity)
-| where cvssScore >= 7.0
-| summarize TotalHighCvss = count(),
-            PatchableCount = countif(patchable == true),
-            CriticalCvss = countif(cvssScore >= 9.0)
+| summarize CoverageCount = countif(isnotnull(cvssScore)),
+        TotalHighCvss = countif(cvssScore >= 7.0),
+        PatchableCount = countif(cvssScore >= 7.0 and patchable == true),
+        CriticalCvss = countif(cvssScore >= 9.0)
 "@
         $cvssResults = @(Search-AzGraph -Query $cvssQuery -First 1 -UseTenantScope | Expand-AzGraphResult)
-        if ($cvssResults.Count -gt 0 -and $cvssResults[0].TotalHighCvss -gt 0) {
+    if ($cvssResults.Count -eq 0 -or $cvssResults[0].CoverageCount -eq 0) {
+        Write-Host " [SKIP]" -ForegroundColor DarkYellow
+        Write-Host "           No Defender CVSS sub-assessment coverage was returned" -ForegroundColor DarkYellow
+        $tc22Status = 'SKIP'; $tc22Details = 'No Defender sub-assessments with CVSS data were available to establish vulnerability coverage.'
+        $tc2Skip++
+    } elseif ($cvssResults[0].TotalHighCvss -gt 0) {
             $totalCvss = $cvssResults[0].TotalHighCvss
             $patchable = $cvssResults[0].PatchableCount
             $critCvss = $cvssResults[0].CriticalCvss
             Write-Host " [FAIL]" -ForegroundColor Red
             Write-Host "           $totalCvss vulnerabilities with CVSS >= 7.0 (Critical >=9.0: $critCvss, Patchable: $patchable)" -ForegroundColor Red
             Write-Host "           FAIL if vendor fix available > 14 days ago" -ForegroundColor DarkRed
+            $tc22Status = 'FAIL'; $tc22Details = "$totalCvss vulnerabilities have CVSS 7.0 or higher; $critCvss are critical and $patchable are marked patchable."
             $tc2Fail++
         } else {
             Write-Host " [PASS]" -ForegroundColor Green
             Write-Host "           No CVSS 7.0+ vulnerabilities found in sub-assessments" -ForegroundColor DarkGray
+            $tc22Status = 'PASS'; $tc22Details = 'No Defender sub-assessments with CVSS 7.0 or higher were returned.'
             $tc2Pass++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query CVSS data: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc22Details = "CVSS sub-assessment query failed: $($_.Exception.Message)"
         $tc2Warn++
     }
+    Add-TestResult -TestId 'TC2.2' -ControlGroup 'TC2: Patching' -TestName 'CVSS 7.0 or Higher Vulnerabilities' -Status $tc22Status -Details $tc22Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: securityresources/subassessments' -Query $cvssQuery
     
     # --- TC2.3: Check for unsupported / end-of-life software ---
     Write-Host "         2.3 Unsupported / End-of-Life Software" -ForegroundColor White -NoNewline
+    $tc23Status = 'WARN'; $tc23Details = 'The Azure Resource Graph query did not complete.'
     try {
         $eolQuery = @"
 securityresources
 | where type == 'microsoft.security/assessments'
-| where properties.status.code == 'Unhealthy'
-| where properties.displayName has_any ('end of life', 'end of support', 'unsupported', 'deprecated', 'eol', 'end-of-life')
-| summarize EolFindings = count(),
-            AffectedResources = dcount(tostring(properties.resourceDetails.Id))
+| extend isEolAssessment = properties.displayName has_any ('end of life', 'end of support', 'unsupported', 'deprecated', 'eol', 'end-of-life'),
+     statusCode = tostring(properties.status.code)
+| summarize CoverageCount = countif(isEolAssessment),
+        EolFindings = countif(isEolAssessment and statusCode == 'Unhealthy'),
+        AffectedResources = dcountif(tostring(properties.resourceDetails.Id), isEolAssessment and statusCode == 'Unhealthy')
 "@
         $eolResults = @(Search-AzGraph -Query $eolQuery -First 1 -UseTenantScope | Expand-AzGraphResult)
-        if ($eolResults.Count -gt 0 -and $eolResults[0].EolFindings -gt 0) {
+    if ($eolResults.Count -eq 0 -or $eolResults[0].CoverageCount -eq 0) {
+        Write-Host " [SKIP]" -ForegroundColor DarkYellow
+        Write-Host "           No applicable Defender end-of-life assessments were returned" -ForegroundColor DarkYellow
+        $tc23Status = 'SKIP'; $tc23Details = 'No applicable Defender end-of-life assessments were available to establish software support coverage.'
+        $tc2Skip++
+    } elseif ($eolResults[0].EolFindings -gt 0) {
             Write-Host " [FAIL]" -ForegroundColor Red
             Write-Host "           $($eolResults[0].EolFindings) findings for end-of-life/unsupported software across $($eolResults[0].AffectedResources) resources" -ForegroundColor Red
             Write-Host "           Unsupported software must be removed or isolated for CE+ compliance" -ForegroundColor DarkRed
+            $tc23Status = 'FAIL'; $tc23Details = "$($eolResults[0].EolFindings) end-of-life or unsupported software findings affect $($eolResults[0].AffectedResources) resources."
             $tc2Fail++
         } else {
             Write-Host " [PASS]" -ForegroundColor Green
             Write-Host "           No end-of-life or unsupported software findings" -ForegroundColor DarkGray
+            $tc23Status = 'PASS'; $tc23Details = 'No unhealthy assessments matching unsupported or end-of-life software were returned.'
             $tc2Pass++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query end-of-life status: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc23Details = "End-of-life software query failed: $($_.Exception.Message)"
         $tc2Warn++
     }
+    Add-TestResult -TestId 'TC2.3' -ControlGroup 'TC2: Patching' -TestName 'Unsupported or End-of-Life Software' -Status $tc23Status -Details $tc23Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: securityresources/assessments' -Query $eolQuery
     
     # --- TC2.4: Authenticated scan on sampled devices (Manual) ---
     Write-Host "         2.4 Authenticated Scan on Sampled Devices" -ForegroundColor White -NoNewline
@@ -6506,14 +7596,14 @@ securityresources
     Add-TestResult -TestId "TC2.4" -ControlGroup "TC2: Patching" -TestName "Authenticated Scan on Sampled Devices" -Status "MANUAL" -Details "Run authenticated vuln scan, check CVSS 7+ fixes within 14 days"
     
     # TC2 Verdict
-    $tc2Verdict = if ($tc2Fail -gt 0) { "FAIL" } elseif ($tc2Warn -gt 0) { "WARN" } elseif ($tc2Manual -gt 0 -and $tc2Pass -eq 0) { "MANUAL" } else { "PASS" }
+    $tc2Verdict = if ($tc2Fail -gt 0) { "FAIL" } elseif ($tc2Warn -gt 0 -or $tc2Skip -gt 0) { "WARN" } elseif ($tc2Manual -gt 0 -and $tc2Pass -eq 0) { "MANUAL" } else { "PASS" }
     $tc2VerdictColor = switch ($tc2Verdict) { "PASS" { "Green" } "FAIL" { "Red" } "WARN" { "Yellow" } "MANUAL" { "DarkYellow" } default { "DarkGray" } }
     Write-Host "         ─────────────────────────────────────" -ForegroundColor DarkGray
-    Write-Host "         TC2 Result: [$tc2Verdict] — ✓ $tc2Pass | ✗ $tc2Fail | ⚠ $tc2Warn | ✋ $tc2Manual manual" -ForegroundColor $tc2VerdictColor
+    Write-Host "         TC2 Result: [$tc2Verdict] — ✓ $tc2Pass | ✗ $tc2Fail | ⚠ $tc2Warn | ↷ $tc2Skip skipped | ✋ $tc2Manual manual" -ForegroundColor $tc2VerdictColor
     Write-Host ""
     switch ($tc2Verdict) { "PASS" { $passCount++ } "FAIL" { $failCount++ } "WARN" { $warnCount++ } "MANUAL" { $manualCount++ } }
     Add-TestResult -TestId "TC2" -ControlGroup "CE+ v3.2 Spec" -TestName "TC2: Patching / Authenticated Scan" -Status $tc2Verdict `
-        -Details "$tc2Pass passed | $tc2Fail failed | $tc2Warn warnings | 🤚 $tc2Manual manual subtests"
+        -Details "$tc2Pass passed | $tc2Fail failed | $tc2Warn warnings | $tc2Skip skipped | 🤚 $tc2Manual manual subtests"
     
     # ═══════════════════════════════════════════════════════
     # TC3: Malware Protection (Test Case 3)
@@ -6527,6 +7617,7 @@ securityresources
     
     # --- TC3.1: Verify endpoint protection is installed and running ---
     Write-Host "         3.1 Endpoint Protection Installed & Running" -ForegroundColor White -NoNewline
+    $tc31Status = 'WARN'; $tc31Details = 'The Azure Resource Graph query did not complete.'
     try {
         $epQuery = @"
 securityresources
@@ -6546,25 +7637,31 @@ securityresources
                 Write-Host " [FAIL]" -ForegroundColor Red
                 Write-Host "           $unhealthy endpoint protection findings unhealthy ($healthy healthy)" -ForegroundColor Red
                 Write-Host "           All machines must have anti-malware installed and active" -ForegroundColor DarkRed
+                $tc31Status = 'FAIL'; $tc31Details = "$unhealthy endpoint protection assessments are unhealthy; $healthy are healthy."
                 $tc3Fail++
             } else {
                 Write-Host " [PASS]" -ForegroundColor Green
                 Write-Host "           All $healthy endpoint protection assessments are healthy" -ForegroundColor DarkGray
+                $tc31Status = 'PASS'; $tc31Details = "All $healthy returned endpoint protection assessments are healthy."
                 $tc3Pass++
             }
         } else {
             Write-Host " [WARN]" -ForegroundColor Yellow
             Write-Host "           No endpoint protection assessments found — ensure Defender for Cloud is enabled" -ForegroundColor Yellow
+            $tc31Details = 'No endpoint protection assessments were returned; Defender for Cloud coverage must be verified.'
             $tc3Warn++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query endpoint protection: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc31Details = "Endpoint protection query failed: $($_.Exception.Message)"
         $tc3Warn++
     }
+    Add-TestResult -TestId 'TC3.1' -ControlGroup 'TC3: Malware' -TestName 'Endpoint Protection Installed and Running' -Status $tc31Status -Details $tc31Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: securityresources/assessments' -Query $epQuery
     
     # --- TC3.2: Check Microsoft Defender for Servers is enabled ---
     Write-Host "         3.2 Defender for Servers / Cloud Workload Protection" -ForegroundColor White -NoNewline
+    $tc32Status = 'WARN'; $tc32Details = 'The Azure Resource Graph query did not complete.'
     try {
         $defenderQuery = @"
 securityresources
@@ -6585,25 +7682,31 @@ securityresources
             if ($free -gt 0) {
                 Write-Host " [WARN]" -ForegroundColor Yellow
                 Write-Host "           $enabled/$total Defender plans enabled, $free on Free tier (limited protection)" -ForegroundColor Yellow
+                $tc32Details = "$enabled of $total Defender plans use the Standard tier; $free remain on the Free tier."
                 $tc3Warn++
             } else {
                 Write-Host " [PASS]" -ForegroundColor Green
                 Write-Host "           All $enabled/$total Defender for Cloud plans enabled (Standard)" -ForegroundColor DarkGray
+                $tc32Status = 'PASS'; $tc32Details = "All $enabled returned Defender for Cloud plans use the Standard tier."
                 $tc3Pass++
             }
         } else {
             Write-Host " [WARN]" -ForegroundColor Yellow
             Write-Host "           Could not determine Defender for Cloud pricing tier" -ForegroundColor Yellow
+            $tc32Details = 'No applicable Defender for Cloud pricing records were returned.'
             $tc3Warn++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query Defender plans: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc32Details = "Defender plan query failed: $($_.Exception.Message)"
         $tc3Warn++
     }
+    Add-TestResult -TestId 'TC3.2' -ControlGroup 'TC3: Malware' -TestName 'Defender for Cloud Workload Protection' -Status $tc32Status -Details $tc32Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: securityresources/pricings' -Query $defenderQuery
     
     # --- TC3.3: Anti-malware signature currency ---
     Write-Host "         3.3 Anti-Malware Signature Currency" -ForegroundColor White -NoNewline
+    $tc33Status = 'WARN'; $tc33Details = 'The Azure Resource Graph query did not complete.'
     try {
         $sigQuery = @"
 securityresources
@@ -6617,20 +7720,25 @@ securityresources
         if ($sigResults.Count -gt 0 -and $sigResults[0].OutOfDate -gt 0) {
             Write-Host " [FAIL]" -ForegroundColor Red
             Write-Host "           $($sigResults[0].OutOfDate) machines have out-of-date anti-malware signatures" -ForegroundColor Red
+            $tc33Status = 'FAIL'; $tc33Details = "$($sigResults[0].OutOfDate) anti-malware signature assessments are unhealthy."
             $tc3Fail++
         } elseif ($sigResults.Count -gt 0 -and $sigResults[0].TotalChecks -gt 0) {
             Write-Host " [PASS]" -ForegroundColor Green
             Write-Host "           All anti-malware signatures are up to date" -ForegroundColor DarkGray
+            $tc33Status = 'PASS'; $tc33Details = "All $($sigResults[0].TotalChecks) returned anti-malware signature assessments are healthy."
             $tc3Pass++
         } else {
             Write-Host " [SKIP]" -ForegroundColor DarkGray
             Write-Host "           No anti-malware signature assessments found" -ForegroundColor DarkGray
+            $tc33Status = 'SKIP'; $tc33Details = 'No anti-malware signature assessments were returned.'
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query signature status: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc33Details = "Anti-malware signature query failed: $($_.Exception.Message)"
         $tc3Warn++
     }
+    Add-TestResult -TestId 'TC3.3' -ControlGroup 'TC3: Malware' -TestName 'Anti-Malware Signature Currency' -Status $tc33Status -Details $tc33Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: securityresources/assessments' -Query $sigQuery
     
     # --- TC3.4: Email malware test (Manual) ---
     Write-Host "         3.4 Email Malware Test (Subtest 3.1.1)" -ForegroundColor White -NoNewline
@@ -6687,6 +7795,7 @@ securityresources
     
     # --- TC4.1: MFA enforcement via Azure Policy compliance ---
     Write-Host "         4.1 MFA Enforcement Policies" -ForegroundColor White -NoNewline
+    $tc41Status = 'WARN'; $tc41Details = 'The Azure Resource Graph query did not complete.'
     try {
         $mfaQuery = @"
 securityresources
@@ -6706,25 +7815,32 @@ securityresources
                 Write-Host " [FAIL]" -ForegroundColor Red
                 Write-Host "           $mfaUnhealthy MFA-related Defender assessments are unhealthy ($mfaHealthy healthy)" -ForegroundColor Red
                 Write-Host "           MFA must be enforced for all users accessing cloud services" -ForegroundColor DarkRed
+                $tc41Status = 'FAIL'; $tc41Details = "$mfaUnhealthy MFA-related assessments are unhealthy; $mfaHealthy are healthy."
                 $tc4Fail++
             } else {
                 Write-Host " [PASS]" -ForegroundColor Green
                 Write-Host "           All $mfaHealthy MFA-related Defender assessments are healthy" -ForegroundColor DarkGray
+                $tc41Status = 'PASS'; $tc41Details = "All $mfaHealthy returned MFA-related assessments are healthy."
                 $tc4Pass++
             }
         } else {
             Write-Host " [WARN]" -ForegroundColor Yellow
             Write-Host "           No MFA-related security assessments found — ensure MFA policies are configured" -ForegroundColor Yellow
+            $tc41Details = 'No MFA-related security assessments were returned; MFA configuration must be verified.'
             $tc4Warn++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query MFA assessments: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc41Details = "MFA assessment query failed: $($_.Exception.Message)"
         $tc4Warn++
     }
+    Add-TestResult -TestId 'TC4.1' -ControlGroup 'TC4: MFA' -TestName 'MFA Security Assessments' -Status $tc41Status -Details $tc41Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: securityresources/assessments' -Query $mfaQuery
     
     # --- TC4.2: Check for Conditional Access policies enforcing MFA ---
     Write-Host "         4.2 Conditional Access MFA Policies" -ForegroundColor White -NoNewline
+    $tc42Status = 'WARN'; $tc42Details = 'The assignment inventory filter did not complete.'
+    $mfaPolicyQuery = "PolicyAssignments | Where-Object { displayName or policyDefinitionId matches 'MFA|multi.factor|multifactor|conditional.access' }"
     try {
         # Check if MFA-related policies are assigned (from the policy assignments data)
         $mfaPolicies = @($PolicyAssignments | Where-Object {
@@ -6738,18 +7854,22 @@ securityresources
                 Write-Host "           • $($mp.displayName)" -ForegroundColor DarkGray
             }
             if ($mfaPolicies.Count -gt 3) { Write-Host "           • ... and $($mfaPolicies.Count - 3) more" -ForegroundColor DarkGray }
+            $tc42Status = 'PASS'; $tc42Details = "$($mfaPolicies.Count) MFA or Conditional Access policy assignments were found in the collected inventory."
             $tc4Pass++
         } else {
             Write-Host " [WARN]" -ForegroundColor Yellow
             Write-Host "           No MFA-related policy assignments detected in current scope" -ForegroundColor Yellow
             Write-Host "           Verify Conditional Access policies in Entra ID > Protection > Conditional Access" -ForegroundColor DarkGray
+            $tc42Details = 'No MFA-related policy assignments were detected in the collected Azure Policy inventory; Entra Conditional Access requires separate verification.'
             $tc4Warn++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not check MFA policies: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc42Details = "MFA assignment inventory filter failed: $($_.Exception.Message)"
         $tc4Warn++
     }
+    Add-TestResult -TestId 'TC4.2' -ControlGroup 'TC4: MFA' -TestName 'Conditional Access and MFA Policy Inventory' -Status $tc42Status -Details $tc42Details -EvidenceType 'Automated' -Source 'Collected Azure Policy assignment inventory; Entra Conditional Access is not queried' -Query $mfaPolicyQuery
     
     # --- TC4.3: Interactive MFA verification (Manual) ---
     Write-Host "         4.3 Interactive MFA Verification" -ForegroundColor White -NoNewline
@@ -6784,6 +7904,7 @@ securityresources
     
     # --- TC5.1: Check for excessive Owner/Contributor role assignments ---
     Write-Host "         5.1 Excessive Privileged Role Assignments" -ForegroundColor White -NoNewline
+    $tc51Status = 'WARN'; $tc51Details = 'The Azure Resource Graph query did not complete.'
     try {
         $rbacQuery = @"
 authorizationresources
@@ -6817,25 +7938,31 @@ authorizationresources
             if ($owners -gt 5) {
                 Write-Host "         [WARN]" -ForegroundColor Yellow
                 Write-Host "           High number of Owner role assignments ($owners) — review for least-privilege" -ForegroundColor Yellow
+                $tc51Details = "$owners Owner assignments exceed the review threshold of 5; $contributors Contributor and $uaa User Access Administrator assignments were also found."
                 $tc5Warn++
             } else {
                 Write-Host "         [PASS]" -ForegroundColor Green
                 Write-Host "           Privileged role counts appear reasonable" -ForegroundColor DarkGray
+                $tc51Status = 'PASS'; $tc51Details = "$owners Owner, $contributors Contributor, and $uaa User Access Administrator assignments were found; Owner count does not exceed 5."
                 $tc5Pass++
             }
         } else {
             Write-Host " [PASS]" -ForegroundColor Green
             Write-Host "           No Owner/Contributor/User Access Admin role assignments found" -ForegroundColor DarkGray
+            $tc51Status = 'PASS'; $tc51Details = 'No Owner, Contributor, or User Access Administrator assignments were returned.'
             $tc5Pass++
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query RBAC assignments: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc51Details = "Privileged role assignment query failed: $($_.Exception.Message)"
         $tc5Warn++
     }
+    Add-TestResult -TestId 'TC5.1' -ControlGroup 'TC5: Accounts' -TestName 'Privileged Role Assignment Review' -Status $tc51Status -Details $tc51Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: authorizationresources/role assignments' -Query $rbacQuery
     
     # --- TC5.2: Check Defender recommendation for admin account controls ---
     Write-Host "         5.2 Admin Account Security Recommendations" -ForegroundColor White -NoNewline
+    $tc52Status = 'WARN'; $tc52Details = 'The Azure Resource Graph query did not complete.'
     try {
         $adminQuery = @"
 securityresources
@@ -6850,20 +7977,25 @@ securityresources
         if ($adminResults.Count -gt 0 -and $adminResults[0].Unhealthy -gt 0) {
             Write-Host " [WARN]" -ForegroundColor Yellow
             Write-Host "           $($adminResults[0].Unhealthy) admin/privilege-related Defender findings need attention" -ForegroundColor Yellow
+            $tc52Details = "$($adminResults[0].Unhealthy) admin or privilege-related Defender assessments are unhealthy."
             $tc5Warn++
         } elseif ($adminResults.Count -gt 0 -and $adminResults[0].TotalAdminChecks -gt 0) {
             Write-Host " [PASS]" -ForegroundColor Green
             Write-Host "           All $($adminResults[0].Healthy) admin/privilege assessments are healthy" -ForegroundColor DarkGray
+            $tc52Status = 'PASS'; $tc52Details = "All $($adminResults[0].Healthy) returned admin or privilege-related assessments are healthy."
             $tc5Pass++
         } else {
             Write-Host " [SKIP]" -ForegroundColor DarkGray
             Write-Host "           No admin-related security assessments found" -ForegroundColor DarkGray
+            $tc52Status = 'SKIP'; $tc52Details = 'No admin or privilege-related Defender assessments were returned.'
         }
     } catch {
         Write-Host " [WARN]" -ForegroundColor Yellow
         Write-Host "           Could not query admin assessments: $($_.Exception.Message)" -ForegroundColor Yellow
+        $tc52Details = "Admin security assessment query failed: $($_.Exception.Message)"
         $tc5Warn++
     }
+    Add-TestResult -TestId 'TC5.2' -ControlGroup 'TC5: Accounts' -TestName 'Admin Account Security Recommendations' -Status $tc52Status -Details $tc52Details -EvidenceType 'Automated' -Source 'Azure Resource Graph: securityresources/assessments' -Query $adminQuery
     
     # --- TC5.3: Interactive admin/standard user separation (Manual) ---
     Write-Host "         5.3 Interactive Account Separation Test" -ForegroundColor White -NoNewline
@@ -6892,121 +8024,72 @@ securityresources
     
     Write-Progress -Activity "CE Compliance Tests" -Status "Complete" -PercentComplete 100 -Id 20
     Write-Progress -Activity "CE Compliance Tests" -Completed -Id 20
-    
-    # ═══════════════════════════════════════════════════════
-    # PER-SCOPE COMPLIANCE BREAKDOWN (multi-assignment only)
-    # ═══════════════════════════════════════════════════════
-    if ($perScopeCompliance.Count -gt 0 -and $ceAssignments.Count -gt 1) {
-        Write-Host "   ───────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-        Write-Host "   PER-SCOPE COMPLIANCE BREAKDOWN" -ForegroundColor Cyan
-        Write-Host "   ───────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-        foreach ($a in $ceAssignments) {
-            $aid = $a.assignmentId.ToLower()
-            $scopeLabel = "$($a.displayName) ($($a.scopeType))"
-            $enfTag = if ($a.enforcementMode -eq 'DoNotEnforce') { " [Audit-only]" } else { " [Enforced]" }
-            if ($perScopeCompliance.ContainsKey($aid)) {
-                $psd = $perScopeCompliance[$aid]
-                $total = [int]$psd.Total
-                $compliant = [int]$psd.Compliant
-                $nonCompliant = [int]$psd.NonCompliant
-                $exempt = [int]$psd.Exempt
-                $pct = if ($total -gt 0) { [math]::Round(($compliant / $total) * 100, 1) } else { 0 }
-                $pctColor = if ($pct -ge 90) { "Green" } elseif ($pct -ge 50) { "Yellow" } else { "Red" }
-                Write-Host "     • $scopeLabel$enfTag" -ForegroundColor White
-                Write-Host "       Compliance: " -NoNewline -ForegroundColor Gray
-                Write-Host "$pct%" -NoNewline -ForegroundColor $pctColor
-                Write-Host " — $compliant compliant / $nonCompliant non-compliant / $exempt exempt (of $total)" -ForegroundColor Gray
-            } else {
-                Write-Host "     • $scopeLabel$enfTag" -ForegroundColor White
-                Write-Host "       Compliance: No data available" -ForegroundColor DarkGray
-            }
-        }
-        Write-Host "   ───────────────────────────────────────────────────────────────────────────" -ForegroundColor Cyan
-        Write-Host ""
-    }
 
-    # ═══════════════════════════════════════════════════════
-    # TEST SUMMARY
-    # ═══════════════════════════════════════════════════════
-    $totalTests = $passCount + $failCount + $warnCount + $skipCount + $manualCount
-    $overallVerdict = if ($failCount -gt 0) { "FAIL" } elseif ($warnCount -gt 0) { "WARN" } elseif ($manualCount -gt 0) { "PARTIAL" } else { "PASS" }
-    $overallColor = switch ($overallVerdict) { "PASS" { "Green" } "FAIL" { "Red" } "WARN" { "Yellow" } "PARTIAL" { "DarkYellow" } }
-    
-    $boxW = 77 # inner width between ║ chars
-    $verdictTag = "[$overallVerdict]"
-    $titleText = "  TEST RESULTS SUMMARY"
-    $titlePad = $boxW - $titleText.Length - $verdictTag.Length - 2
-    if ($titlePad -lt 1) { $titlePad = 1 }
-
-    Write-Host ("╔" + ("═" * $boxW) + "╗") -ForegroundColor $overallColor
-    Write-Host ("║" + $titleText + (" " * $titlePad) + $verdictTag + "  ║") -ForegroundColor $overallColor
-    Write-Host ("╠" + ("═" * $boxW) + "╣") -ForegroundColor $overallColor
-
-    $summaryLines = @(
-        @{ Label = "Total Tests"; Value = $totalTests;  Color = "White" },
-        @{ Label = "PASS";        Value = $passCount;   Color = "Green" },
-        @{ Label = "FAIL";        Value = $failCount;   Color = if ($failCount -gt 0) { "Red" } else { "Green" } },
-        @{ Label = "WARN";        Value = $warnCount;   Color = if ($warnCount -gt 0) { "Yellow" } else { "Green" } },
-        @{ Label = "MANUAL";      Value = $manualCount; Color = if ($manualCount -gt 0) { "DarkYellow" } else { "Green" } },
-        @{ Label = "SKIP";        Value = $skipCount;   Color = "DarkGray" }
-    )
-    foreach ($s in $summaryLines) {
-        $content = "  {0,-14}: {1}" -f $s.Label, $s.Value
-        $pad = $boxW - $content.Length
-        if ($pad -lt 0) { $pad = 0 }
-        Write-Host ("║" + $content + (" " * $pad) + "║") -ForegroundColor $s.Color
-    }
-
-    Write-Host ("╚" + ("═" * $boxW) + "╝") -ForegroundColor $overallColor
-    Write-Host ""
-    
-    if ($failCount -gt 0) {
-        Write-Host "   ❌ FAILED — Your environment does not fully meet Cyber Essentials requirements." -ForegroundColor Red
-        Write-Host "   Review the FAIL results above and remediate before re-testing." -ForegroundColor Red
-    } elseif ($warnCount -gt 0) {
-        Write-Host "   ⚠️  PARTIAL — Policies are assigned but some have non-compliant resources." -ForegroundColor Yellow
-        Write-Host "   Create remediation tasks or adjust resource configurations." -ForegroundColor Yellow
-    } elseif ($manualCount -gt 0) {
-        Write-Host "   ✋ PARTIAL — Automated checks passed but $manualCount test(s) require manual verification." -ForegroundColor DarkYellow
-        Write-Host "   Complete the MANUAL checklist items above with a qualified CE+ assessor." -ForegroundColor DarkYellow
-    } else {
-        Write-Host "   ✓ All evaluated CE/CE+ controls are passing." -ForegroundColor Green
-    }
-    
-    Write-Host ""
-    Write-Host "   ⚠️  DISCLAIMER: This is an experimental assessment tool, not an official CE+ certification." -ForegroundColor Yellow
-    Write-Host "   The CE+ v3.2 test specification includes manual/physical tests that cannot be automated." -ForegroundColor Gray
-    Write-Host "   Based on: https://www.ncsc.gov.uk/files/cyber-essentials-plus-test-specification-v3-2.pdf" -ForegroundColor Gray
-    Write-Host "   Azure ref: https://learn.microsoft.com/en-us/azure/compliance/offerings/offering-uk-cyber-essentials-plus" -ForegroundColor Gray
-    Write-Host "   Always verify results against Azure Portal > Policy > Compliance and work with an" -ForegroundColor Gray
-    Write-Host "   accredited CE+ assessor for official certification." -ForegroundColor Gray
-    
-    # Build per-scope data for HTML export
-    $perScopeData = @()
-    if ($perScopeCompliance.Count -gt 0 -and $ceAssignments.Count -gt 1) {
-        foreach ($a in $ceAssignments) {
-            $aid = $a.assignmentId.ToLower()
-            $psd = if ($perScopeCompliance.ContainsKey($aid)) { $perScopeCompliance[$aid] } else { $null }
-            $perScopeData += [PSCustomObject]@{
-                AssignmentId    = $aid
-                DisplayName     = $a.displayName
-                ScopeType       = $a.scopeType
-                EnforcementMode = $a.enforcementMode
-                Total           = if ($psd) { [int]$psd.Total } else { 0 }
-                Compliant       = if ($psd) { [int]$psd.Compliant } else { 0 }
-                NonCompliant    = if ($psd) { [int]$psd.NonCompliant } else { 0 }
-                Exempt          = if ($psd) { [int]$psd.Exempt } else { 0 }
-                CompliancePct   = if ($psd -and [int]$psd.Total -gt 0) { [math]::Round(([int]$psd.Compliant / [int]$psd.Total) * 100, 1) } else { 0 }
-            }
-        }
-    }
+    $technicalStatuses = @($testResults | ForEach-Object { $_.Status })
+    $technicalState = if ('FAIL' -in $technicalStatuses -or 'WARN' -in $technicalStatuses -or 'SKIP' -in $technicalStatuses -or 'MANUAL' -in $technicalStatuses) { 'PartiallyEvaluated' } else { 'Evaluated' }
 
     return @{
+        Assessment = New-CEPAssessment -Requested $true -State $technicalState -MappingState NotRequested -TestState $technicalState
         TestResults = $testResults
-        PerScopeData = $perScopeData
-        PerScopeGroupData = if ($perScopeGroupData) { $perScopeGroupData } else { @{} }
-        PerScopeGroupRaw = if ($perScopeGroupRaw) { $perScopeGroupRaw } else { @{} }
-        RefIdToGroupDisplay = if ($refIdToGroupDisplay) { $refIdToGroupDisplay } else { @{} }
+        NextTestNumber = $testNumber
+    }
+}
+
+function Invoke-CEPComplianceTests {
+    param(
+        [Parameter(Mandatory)][object[]]$PolicyAssignments,
+        [switch]$TriggerScan,
+        [switch]$ExportResults,
+        [string]$DefinitionId = '',
+        [ValidateNotNullOrEmpty()][string]$DefinitionVersion = '3.1'
+    )
+
+    $initiativeResult = Invoke-CEPInitiativeAssessment -PolicyAssignments $PolicyAssignments -TriggerScan:$TriggerScan -ExportResults:$ExportResults -DefinitionId $DefinitionId -DefinitionVersion $DefinitionVersion
+    $technicalResult = Invoke-CEPPlusTechnicalAssessment -PolicyAssignments $PolicyAssignments -StartTestNumber $initiativeResult.NextTestNumber
+
+    $combinedResults = [System.Collections.ArrayList]@()
+    foreach ($result in @($initiativeResult.TestResults) + @($technicalResult.TestResults)) {
+        [void]$combinedResults.Add($result)
+    }
+
+    $technicalStatuses = @($technicalResult.TestResults | ForEach-Object { $_.Status })
+    $technicalState = if ('FAIL' -in $technicalStatuses -or 'WARN' -in $technicalStatuses -or 'SKIP' -in $technicalStatuses -or 'MANUAL' -in $technicalStatuses) { 'PartiallyEvaluated' } else { 'Evaluated' }
+    $mappingUnavailable = $initiativeResult.Assessment.MappingState -ne 'Available'
+    $assessmentState = if ($initiativeResult.Assessment.State -eq 'EvaluationFailed') { 'EvaluationFailed' } elseif ($mappingUnavailable) { 'PrerequisiteUnavailable' } elseif ($initiativeResult.Assessment.State -eq 'PartiallyEvaluated' -or $technicalState -eq 'PartiallyEvaluated') { 'PartiallyEvaluated' } else { 'Evaluated' }
+
+    $scoreResult = Get-CEPScore -TestResults $technicalResult.TestResults -MeasurementBlocked:$mappingUnavailable
+
+    $assessment = New-CEPAssessment `
+        -Requested $true `
+        -State $assessmentState `
+        -MappingState $(if ($mappingUnavailable) { 'Unavailable' } else { $initiativeResult.Assessment.MappingState }) `
+        -TestState $technicalState `
+        -ScoreState $scoreResult.ScoreState `
+        -Score $scoreResult.Score `
+        -PrerequisiteReason $initiativeResult.Assessment.PrerequisiteReason `
+        -MappingSourceState $initiativeResult.Assessment.MappingSourceState `
+        -DefinitionId $initiativeResult.Assessment.DefinitionId `
+        -DefinitionVersion $initiativeResult.Assessment.DefinitionVersion `
+        -DefinitionDisplayName $initiativeResult.Assessment.DefinitionDisplayName `
+        -SelectionMethod $initiativeResult.Assessment.SelectionMethod `
+        -CandidateDefinitions $initiativeResult.Assessment.CandidateDefinitions `
+        -DataQuality ([PSCustomObject][ordered]@{
+            State = if ($mappingUnavailable -or $technicalState -eq 'PartiallyEvaluated') { 'Partial' } else { 'Complete' }
+            EvidenceCount = $combinedResults.Count
+            Limitations = @(
+                if ($mappingUnavailable) { $initiativeResult.Assessment.PrerequisiteReason }
+                if ('SKIP' -in $technicalStatuses) { 'One or more technical checks lacked query evidence.' }
+                if ('MANUAL' -in $technicalStatuses) { 'One or more controls require manual verification.' }
+            )
+        })
+
+    return @{
+        Assessment = $assessment
+        TestResults = $combinedResults
+        PerScopeData = $initiativeResult.PerScopeData
+        PerScopeGroupData = $initiativeResult.PerScopeGroupData
+        PerScopeGroupRaw = $initiativeResult.PerScopeGroupRaw
+        RefIdToGroupDisplay = $initiativeResult.RefIdToGroupDisplay
     }
 }
 
@@ -7096,6 +8179,7 @@ $scopeFilter
     overrides = properties.overrides,
     createdOn = coalesce(tostring(properties.metadata.createdOn), tostring(properties.createdOn), ''),
     identityType = tostring(identity.type),
+    identityPrincipalId = tostring(identity.principalId),
     subscriptionId,
     resourceGroup
 | order by scopeType asc, assignmentName asc
@@ -7149,16 +8233,23 @@ policyresources
 | extend policyAssignmentId = tolower(tostring(properties.policyAssignmentId))
 | summarize 
     TotalResources = dcount(tostring(properties.resourceId)),
-    NonCompliantResources = dcountif(tostring(properties.resourceId), properties.complianceState == 'NonCompliant'),
-    NonCompliantPolicyDefs = dcountif(tostring(properties.policyDefinitionId), properties.complianceState == 'NonCompliant')
+    CompliantResources = dcountif(tostring(properties.resourceId), properties.complianceState =~ 'Compliant'),
+    NonCompliantResources = dcountif(tostring(properties.resourceId), properties.complianceState =~ 'NonCompliant'),
+    NonCompliantPolicyDefs = dcountif(tostring(properties.policyDefinitionId), properties.complianceState =~ 'NonCompliant'),
+    LastEvaluation = max(todatetime(properties.timestamp))
     by policyAssignmentId
 "@
 
 $complianceData = @{}
+$complianceQuerySucceeded = $false
+$complianceQueryError = ''
+$complianceQueryTimestamp = [datetime]::UtcNow
+$complianceQueryRecordCount = 0
 try {
     Write-Progress -Activity "Querying Compliance Data" -Status "Retrieving non-compliant resources..." -PercentComplete 0 -Id 11
     
     $complianceResults = Search-AzGraph -Query $complianceQuery -First 1000 -UseTenantScope
+    $complianceQuerySucceeded = $true
     
     if ($complianceResults) {
         # Handle pagination if needed
@@ -7177,32 +8268,61 @@ try {
             }
             $complianceResults = $allComplianceResults.ToArray()
         }
+        $complianceQueryRecordCount = @($complianceResults).Count
         
         Write-Progress -Activity "Querying Compliance Data" -Status "Processing results..." -PercentComplete 75 -Id 11
         
         # Build lookup dictionary
         foreach ($item in $complianceResults) {
             $complianceData[$item.policyAssignmentId] = @{
+                ComplianceState = (Resolve-ComplianceAssessmentState `
+                    -QuerySucceeded $true `
+                    -QueryRecordCount 1 `
+                    -EvaluatedResources $item.TotalResources `
+                    -CompliantResources $item.CompliantResources `
+                    -NonCompliantResources $item.NonCompliantResources `
+                    -Timestamp $complianceQueryTimestamp).State
+                CompliantResources = $item.CompliantResources
                 NonCompliantResources = $item.NonCompliantResources
                 NonCompliantPolicyDefs = $item.NonCompliantPolicyDefs
                 TotalResources = $item.TotalResources
+                ApplicableResources = $item.TotalResources
+                LastEvaluation = if ($item.LastEvaluation) { ([datetime]$item.LastEvaluation).ToUniversalTime().ToString('o') } else { '' }
             }
         }
         Write-Progress -Activity "Querying Compliance Data" -Completed -Id 11
         $noComplianceCount = $argResults.Count - $complianceData.Count
         Write-Host "  ✓ Retrieved compliance data for $($complianceData.Count) of $($argResults.Count) assignments" -ForegroundColor Green
         if ($noComplianceCount -gt 0) {
-            Write-Host "    ($noComplianceCount assignments have no evaluated resources — shown as 0 non-compliant)" -ForegroundColor DarkGray
+            Write-Host "    ($noComplianceCount assignments have no evaluated resources — shown as Not evaluated)" -ForegroundColor Yellow
         }
     } else {
         Write-Progress -Activity "Querying Compliance Data" -Completed -Id 11
-        Write-Host "  ✓ 0 of $($argResults.Count) assignments have compliance state (no evaluated resources found)" -ForegroundColor Green
+        Write-Host "  Not evaluated: 0 of $($argResults.Count) assignments have policy state data" -ForegroundColor Yellow
     }
 } catch {
+    $complianceQueryError = $_.Exception.Message
     Write-Progress -Activity "Querying Compliance Data" -Completed -Id 11
     Write-Host "  Warning: Could not retrieve compliance data: $($_.Exception.Message)" -ForegroundColor Yellow
     Write-Host "  Continuing without compliance information..." -ForegroundColor Gray
 }
+
+$totalEvaluatedResources = ($complianceData.Values | Measure-Object -Property TotalResources -Sum).Sum
+$totalCompliantResources = ($complianceData.Values | Measure-Object -Property CompliantResources -Sum).Sum
+$totalNonCompliantEvaluations = ($complianceData.Values | Measure-Object -Property NonCompliantResources -Sum).Sum
+$complianceAssessment = Resolve-ComplianceAssessmentState `
+    -QuerySucceeded $complianceQuerySucceeded `
+    -QueryRecordCount $complianceQueryRecordCount `
+    -EvaluatedResources $totalEvaluatedResources `
+    -CompliantResources $totalCompliantResources `
+    -NonCompliantResources $totalNonCompliantEvaluations `
+    -Timestamp $complianceQueryTimestamp `
+    -ErrorMessage $complianceQueryError
+$dataQuality = $complianceAssessment.DataQuality
+$dataQuality | Add-Member -NotePropertyName AssessmentState -NotePropertyValue $complianceAssessment.State
+$dataQuality | Add-Member -NotePropertyName EvaluatedResources -NotePropertyValue $complianceAssessment.EvaluatedResources
+$dataQuality | Add-Member -NotePropertyName CompliantResources -NotePropertyValue $complianceAssessment.CompliantResources
+$dataQuality | Add-Member -NotePropertyName NonCompliantResources -NotePropertyValue $complianceAssessment.NonCompliantResources
 
 Write-Host "" # Blank line
 
@@ -7363,6 +8483,107 @@ try {
 
 Write-Host "" # Blank line
 
+Write-Host "Querying remediation tasks and managed identity roles from Azure Resource Graph..." -ForegroundColor Cyan
+$remediationTaskLookup = @{}
+$remediationTaskQuerySucceeded = $false
+$remediationTaskQueryError = ''
+$remediationTaskQueryTimestamp = [datetime]::UtcNow
+$remediationTaskQuery = @"
+resources
+| where type =~ 'microsoft.policyinsights/remediations'
+| extend
+    assignmentId = tolower(tostring(properties.policyAssignmentId)),
+    taskState = coalesce(tostring(properties.provisioningState), tostring(properties.status)),
+    taskError = coalesce(tostring(properties.statusMessage), tostring(properties.error.message), tostring(properties.deploymentStatus.error)),
+    failedDeployments = toint(properties.deploymentStatus.failedDeployments),
+    successfulDeployments = toint(properties.deploymentStatus.successfulDeployments),
+    totalDeployments = toint(properties.deploymentStatus.totalDeployments),
+    createdOn = coalesce(tostring(systemData.createdAt), tostring(properties.createdOn)),
+    lastUpdated = coalesce(tostring(systemData.lastModifiedAt), tostring(properties.lastUpdatedOn), tostring(properties.createdOn))
+| project taskId = id, taskName = name, assignmentId, taskState, taskError,
+          failedDeployments, successfulDeployments, totalDeployments, createdOn, lastUpdated,
+          policyDefinitionReferenceId = tostring(properties.policyDefinitionReferenceId),
+          resourceDiscoveryMode = tostring(properties.resourceDiscoveryMode),
+          filters = properties.filters
+"@
+try {
+    $remediationTaskResults = [System.Collections.Generic.List[object]]::new()
+    $remediationTaskPage = Search-AzGraph -Query $remediationTaskQuery -First 1000 -UseTenantScope
+    $remediationTaskResults.AddRange(@($remediationTaskPage | Expand-AzGraphResult))
+    while ($remediationTaskPage.Count -eq 1000 -and $remediationTaskPage.SkipToken) {
+        $remediationTaskPage = Search-AzGraph -Query $remediationTaskQuery -First 1000 -SkipToken $remediationTaskPage.SkipToken -UseTenantScope
+        $remediationTaskResults.AddRange(@($remediationTaskPage | Expand-AzGraphResult))
+    }
+    $remediationTaskQuerySucceeded = $true
+    foreach ($task in $remediationTaskResults) {
+        $assignmentKey = [string]$task.assignmentId
+        if (-not $assignmentKey) { continue }
+        if (-not $remediationTaskLookup.ContainsKey($assignmentKey)) { $remediationTaskLookup[$assignmentKey] = @() }
+        $remediationTaskLookup[$assignmentKey] += [PSCustomObject][ordered]@{
+            TaskId = [string]$task.taskId
+            TaskName = [string]$task.taskName
+            State = [string]$task.taskState
+            Error = [string]$task.taskError
+            FailedDeployments = [int]($task.failedDeployments ?? 0)
+            SuccessfulDeployments = [int]($task.successfulDeployments ?? 0)
+            TotalDeployments = [int]($task.totalDeployments ?? 0)
+            CreatedOn = [string]$task.createdOn
+            LastUpdated = [string]$task.lastUpdated
+            PolicyDefinitionReferenceId = [string]$task.policyDefinitionReferenceId
+            ResourceDiscoveryMode = [string]$task.resourceDiscoveryMode
+            Filters = $task.filters
+        }
+    }
+    Write-Host "  Retrieved $($remediationTaskResults.Count) remediation task records" -ForegroundColor Gray
+} catch {
+    $remediationTaskQueryError = $_.Exception.Message
+    Write-Host "  Remediation task evidence unavailable: $remediationTaskQueryError" -ForegroundColor Yellow
+}
+
+$roleAssignmentLookup = @{}
+$roleAssignmentQuerySucceeded = $false
+$roleAssignmentQueryError = ''
+$managedIdentityPrincipalIds = @($argResults | ForEach-Object { [string]$_.identityPrincipalId } | Where-Object { $_ } | Select-Object -Unique)
+if ($managedIdentityPrincipalIds.Count -eq 0) {
+    $roleAssignmentQuerySucceeded = $true
+} else {
+    $principalFilter = ($managedIdentityPrincipalIds | ForEach-Object { "'$(($_ -replace "'", "''").ToLowerInvariant())'" }) -join ', '
+    $roleAssignmentQuery = @"
+authorizationresources
+| where type =~ 'microsoft.authorization/roleassignments'
+| extend principalId = tolower(tostring(properties.principalId))
+| where principalId in~ ($principalFilter)
+| extend lowerId = tolower(id), roleMarker = '/providers/microsoft.authorization/roleassignments/'
+| extend roleScope = substring(id, 0, indexof(lowerId, roleMarker))
+| project principalId, roleDefinitionId = tostring(properties.roleDefinitionId), roleScope
+"@
+    try {
+        $roleAssignmentResults = [System.Collections.Generic.List[object]]::new()
+        $roleAssignmentPage = Search-AzGraph -Query $roleAssignmentQuery -First 1000 -UseTenantScope
+        $roleAssignmentResults.AddRange(@($roleAssignmentPage | Expand-AzGraphResult))
+        while ($roleAssignmentPage.Count -eq 1000 -and $roleAssignmentPage.SkipToken) {
+            $roleAssignmentPage = Search-AzGraph -Query $roleAssignmentQuery -First 1000 -SkipToken $roleAssignmentPage.SkipToken -UseTenantScope
+            $roleAssignmentResults.AddRange(@($roleAssignmentPage | Expand-AzGraphResult))
+        }
+        $roleAssignmentQuerySucceeded = $true
+        foreach ($role in $roleAssignmentResults) {
+            $principalKey = [string]$role.principalId
+            if (-not $roleAssignmentLookup.ContainsKey($principalKey)) { $roleAssignmentLookup[$principalKey] = @() }
+            $roleAssignmentLookup[$principalKey] += [PSCustomObject]@{
+                PrincipalId = $principalKey
+                RoleDefinitionId = [string]$role.roleDefinitionId
+                Scope = [string]$role.roleScope
+            }
+        }
+        Write-Host "  Retrieved $($roleAssignmentResults.Count) relevant role assignments" -ForegroundColor Gray
+    } catch {
+        $roleAssignmentQueryError = $_.Exception.Message
+        Write-Host "  Managed identity role evidence unavailable: $roleAssignmentQueryError" -ForegroundColor Yellow
+    }
+}
+
+Write-Host "" # Blank line
+
 # Identify regulatory compliance initiatives (by resolving initiative definitions)
 Write-Host "Identifying regulatory compliance initiatives..." -ForegroundColor Cyan
 $regulatoryInitiativeGuids = [System.Collections.Generic.HashSet[string]]::new()
@@ -7413,6 +8634,7 @@ policyresources
     defName = name,
     displayName = tostring(properties.displayName),
     effect = tostring(properties.policyRule.then.effect),
+    roleDefinitionIds = properties.policyRule.then.details.roleDefinitionIds,
     category = tostring(properties.metadata.category),
     policyType = tostring(properties.policyType)
 "@
@@ -7436,6 +8658,7 @@ policyresources
                 Effect = "$($def.effect)"
                 Category = "$($def.category)"
                 DisplayName = "$($def.displayName)"
+                RoleDefinitionIds = @($def.roleDefinitionIds)
             }
         }
     }
@@ -7469,6 +8692,7 @@ policyresources
         if ($iKey) {
             # Build effect summary by cross-referencing member policies with $policyDefMetadata
             $effectCounts = [ordered]@{}
+            $initiativeRoleIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             $memberCount = 0
             if ($iDef.policyDefinitions) {
                 foreach ($memberPol in $iDef.policyDefinitions) {
@@ -7482,6 +8706,9 @@ policyresources
                         if (-not $memberEffect) { $memberEffect = 'Unknown' }
                         if (-not $effectCounts.Contains($memberEffect)) { $effectCounts[$memberEffect] = 0 }
                         $effectCounts[$memberEffect]++
+                        foreach ($roleId in @($policyDefMetadata[$memberGuid].RoleDefinitionIds)) {
+                            if ($roleId) { [void]$initiativeRoleIds.Add([string]$roleId) }
+                        }
                     }
                 }
             }
@@ -7503,6 +8730,7 @@ policyresources
                 Version = "$($iDef.version)"
                 EffectSummary = $effectSummary
                 MemberCount = $memberCount
+                RoleDefinitionIds = @($initiativeRoleIds)
             }
         }
     }
@@ -7592,36 +8820,18 @@ foreach ($assignment in $argResults) {
     if ($assignment.policyType -eq 'Initiative') {
         # Resolve the actual effects of member policies within this initiative
         if ($initDefMetadata.ContainsKey($defKey)) {
-            $effectType = $initDefMetadata[$defKey].EffectSummary
+            $rawEffect = $initDefMetadata[$defKey].EffectSummary
             $policyCategory = $initDefMetadata[$defKey].Category
         } else {
-            $effectType = 'Multiple'
+            $rawEffect = 'Multiple'
         }
     } elseif ($policyDefMetadata.ContainsKey($defKey)) {
         # Use actual effect from policy definition metadata
         $rawEffect = $policyDefMetadata[$defKey].Effect
-        # Handle parameterised effects like "[parameters('effect')]"
-        $effectType = if ($rawEffect -match '^\[parameters\(') {
-            # Try to resolve from assignment parameters
-            $effectParamName = if ($rawEffect -match "\[parameters\('([^']+)'\)\]") { $Matches[1] } else { 'effect' }
-            $resolvedEffect = $null
-            if ($assignment.parameters) {
-                try {
-                    $paramObj = if ($assignment.parameters -is [string]) { $assignment.parameters | ConvertFrom-Json } else { $assignment.parameters }
-                    if ($paramObj.$effectParamName.value) { $resolvedEffect = $paramObj.$effectParamName.value }
-                    elseif ($paramObj.$effectParamName) { $resolvedEffect = "$($paramObj.$effectParamName)" }
-                } catch { }
-            }
-            if ($resolvedEffect) { $resolvedEffect } else { 'Audit' }  # Default when parameterised
-        } elseif ($rawEffect) {
-            $rawEffect
-        } else {
-            'Audit'  # Fallback
-        }
         $policyCategory = $policyDefMetadata[$defKey].Category
     } else {
         # Fallback: infer from definition name (legacy behaviour for custom/unavailable definitions)
-        $effectType = switch -Regex ($policyDefName) {
+        $rawEffect = switch -Regex ($policyDefName) {
             'Deny' { 'Deny' }
             'Audit' { 'Audit' }
             'DeployIfNotExists|DINE' { 'DeployIfNotExists' }
@@ -7630,6 +8840,11 @@ foreach ($assignment in $argResults) {
             default { 'Audit' }
         }
     }
+
+    $effectivePolicyEffects = Resolve-EffectivePolicyEffects `
+        -Effect $rawEffect `
+        -AssignmentParameters $assignment.parameters
+    $effectType = $effectivePolicyEffects.PrimaryEffect
     
     # Format parameters
     $parametersString = if ($assignment.parameters) {
@@ -7683,7 +8898,7 @@ foreach ($assignment in $argResults) {
     }
 
     # Get recommendations (now using real category metadata and display name)
-    $recommendationObj = Get-PolicyRecommendation -PolicyName $policyDisplayName -EffectType $effectType `
+    $recommendationObj = Get-PolicyRecommendation -PolicyName $policyDisplayName -EffectType ($effectivePolicyEffects.EffectiveEffects -join ', ') `
         -EnforcementMode $assignment.enforcementMode -PolicyType $assignment.policyType -Category $policyCategory
     
     # Get compliance data for this assignment
@@ -7691,12 +8906,23 @@ foreach ($assignment in $argResults) {
     $nonCompliantResources = 0
     $nonCompliantPolicies = 0
     $totalResources = 0
+    $compliantResources = 0
     
     if ($complianceData.ContainsKey($assignmentIdLower)) {
         $nonCompliantResources = $complianceData[$assignmentIdLower].NonCompliantResources
         $nonCompliantPolicies = $complianceData[$assignmentIdLower].NonCompliantPolicyDefs
         $totalResources = if ($complianceData[$assignmentIdLower].TotalResources) { $complianceData[$assignmentIdLower].TotalResources } else { 0 }
+        $compliantResources = if ($complianceData[$assignmentIdLower].CompliantResources) { $complianceData[$assignmentIdLower].CompliantResources } else { 0 }
     }
+
+    $assignmentComplianceState = (Resolve-ComplianceAssessmentState `
+        -QuerySucceeded $complianceQuerySucceeded `
+        -QueryRecordCount $(if ($complianceData.ContainsKey($assignmentIdLower)) { 1 } else { 0 }) `
+        -EvaluatedResources $totalResources `
+        -CompliantResources $compliantResources `
+        -NonCompliantResources $nonCompliantResources `
+        -Timestamp $complianceQueryTimestamp `
+        -ErrorMessage $complianceQueryError).State
     
     # For single policies, non-compliant policies is 0 or 1
     if ($assignment.policyType -eq 'Policy' -and $nonCompliantResources -gt 0) {
@@ -7719,19 +8945,56 @@ foreach ($assignment in $argResults) {
         $exemptionCount = @($exemptionLookup[$assignmentIdLower] | Where-Object { -not $_.'Is Expired' }).Count
     }
 
+    $requiredRoleIds = if ($assignment.policyType -eq 'Initiative' -and $initDefMetadata.ContainsKey($defKey)) {
+        @($initDefMetadata[$defKey].RoleDefinitionIds)
+    } elseif ($policyDefMetadata.ContainsKey($defKey)) {
+        @($policyDefMetadata[$defKey].RoleDefinitionIds)
+    } else { @() }
+    $principalKey = ([string]$assignment.identityPrincipalId).ToLowerInvariant()
+    $availableRoleAssignments = if ($principalKey -and $roleAssignmentLookup.ContainsKey($principalKey)) { @($roleAssignmentLookup[$principalKey]) } else { @() }
+    $remediationTasks = if ($remediationTaskLookup.ContainsKey($assignmentIdLower)) { @($remediationTaskLookup[$assignmentIdLower]) } else { @() }
+    $activeAssignmentExemptions = if ($exemptionLookup.ContainsKey($assignmentIdLower)) {
+        @($exemptionLookup[$assignmentIdLower] | Where-Object { -not $_.'Is Expired' } | ForEach-Object { $_.'Exemption ID' })
+    } else { @() }
+    $applicableResourceCount = if ($complianceData.ContainsKey($assignmentIdLower)) { [Nullable[int]][int]$complianceData[$assignmentIdLower].ApplicableResources } else { $null }
+    $lastEvaluation = if ($complianceData.ContainsKey($assignmentIdLower)) { [string]$complianceData[$assignmentIdLower].LastEvaluation } else { '' }
+    $remediationEvidence = if ($effectivePolicyEffects.IsRemediating) {
+        New-RemediationEvidence `
+            -AssignmentId $assignment.assignmentId -Scope $assignment.scope `
+            -IdentityType $(if ($assignment.identityType) { $assignment.identityType } else { 'None' }) `
+            -PrincipalId $assignment.identityPrincipalId -RequiredRoles $requiredRoleIds `
+            -RoleAssignments $availableRoleAssignments -TaskRecords $remediationTasks `
+            -TaskQuerySucceeded $remediationTaskQuerySucceeded -RoleQuerySucceeded $roleAssignmentQuerySucceeded `
+            -TaskQueryError $remediationTaskQueryError -RoleQueryError $roleAssignmentQueryError `
+            -EvidenceTimestamp $remediationTaskQueryTimestamp `
+            -ApplicableResourceCount $applicableResourceCount -LastEvaluation $lastEvaluation `
+            -Exemptions $activeAssignmentExemptions -NotScopes @($assignment.notScopes) `
+            -ResourceSelectors @($assignment.resourceSelectors) -Overrides @($assignment.overrides)
+    } else { $null }
+
     $policyResult = [PSCustomObject]@{
+        'Assignment ID'       = $assignment.assignmentId
         'Assignment Name'     = $assignment.assignmentName
         'Display Name'        = $assignment.displayName
         'Policy Type'         = $policyTypeDisplay
         'Category'            = $policyCategory
         'Effect Type'         = $effectType
+        'Effective Effects'   = @($effectivePolicyEffects.EffectiveEffects)
+        'Primary Effect'      = $effectivePolicyEffects.PrimaryEffect
+        'Is Preventive'       = $effectivePolicyEffects.IsPreventive
+        'Is Detective'        = $effectivePolicyEffects.IsDetective
+        'Is Remediating'      = $effectivePolicyEffects.IsRemediating
+        'Is Parameterised'    = $effectivePolicyEffects.IsParameterised
+        'Is Disabled'         = $effectivePolicyEffects.IsDisabled
         'Enforcement Mode'    = $assignment.enforcementMode
+        'Compliance State'    = $assignmentComplianceState
+        'Compliant Resources' = $compliantResources
         'Non-Compliant Resources' = $nonCompliantResources
         'Non-Compliant Policies' = $nonCompliantPolicies
         'Total Resources'     = $totalResources
         'Exemptions'          = $exemptionCount
         'Security Impact'     = $recommendationObj.SecurityImpact
-        'Cost Impact'         = $recommendationObj.CostImpact
+        'Cost Exposure'       = $recommendationObj.CostImpact
         'Compliance Impact'   = $recommendationObj.ComplianceImpact
         'Operational Overhead'= $recommendationObj.OperationalOverhead
         'Risk Level'          = $recommendationObj.RiskLevel
@@ -7743,9 +9006,20 @@ foreach ($assignment in $argResults) {
         'Definition Version'   = $assignment.definitionVersion
         'Assignment Created On'= $assignment.createdOn
         'Identity Type'        = if ($assignment.identityType) { $assignment.identityType } else { 'None' }
+        'Identity Principal ID'= $assignment.identityPrincipalId
+        'Required Role IDs'    = @($requiredRoleIds)
+        'Available Role IDs'   = if ($remediationEvidence) { @($remediationEvidence.AvailableRoles) } else { @() }
+        'Missing Role IDs'     = if ($remediationEvidence) { @($remediationEvidence.MissingRoles) } else { @() }
+        'Remediation State'    = if ($remediationEvidence) { $remediationEvidence.State } else { 'NotApplicable' }
+        'Remediation Evidence' = $remediationEvidence
+        'Applicable Resources' = $applicableResourceCount
+        'Last Evaluation'      = $lastEvaluation
         'Excluded Scopes'      = @($assignment.notScopes).Count
         'Resource Selectors'   = @($assignment.resourceSelectors).Count
         'Overrides'            = @($assignment.overrides).Count
+        'Not Scopes'           = @($assignment.notScopes)
+        'Selector Details'     = @($assignment.resourceSelectors)
+        'Override Details'     = @($assignment.overrides)
         'Parameters'          = $parametersString
         'Recommendation'      = $recommendationObj.Recommendation
         'Scope'               = $assignment.scope
@@ -7775,6 +9049,8 @@ $rgAssignments = ($results | Where-Object { $_.'Scope Type' -eq 'Resource Group'
 $totalExemptions = $exemptionData.Count
 $activeExemptions = @($exemptionData | Where-Object { -not $_.'Is Expired' }).Count
 $assignmentsWithExemptions = ($results | Where-Object { ($_.'Exemptions' -match '^\d+$') -and ([int]$_.'Exemptions' -gt 0) }).Count
+$assessmentFindings = @(New-AssessmentFindings -PolicyResults @($results))
+$assessmentActions = @(ConvertTo-AssessmentActions -AssessmentFindings $assessmentFindings)
 
 Write-Host ""
 Write-Host "┌─────────────────────────────────────────────────────────────────────────────┐" -ForegroundColor Cyan
@@ -7794,10 +9070,18 @@ Write-Host ")" -NoNewline -ForegroundColor DarkGray
 Write-Host (" " * $padding1) -NoNewline
 Write-Host "│" -ForegroundColor Cyan
 Write-Host "│  Non-Compliant: " -NoNewline -ForegroundColor Cyan
-$ncColor = if ($totalNCResources -gt 0) { 'Red' } else { 'Green' }
-Write-Host "$totalNCResources resources" -NoNewline -ForegroundColor $ncColor
-Write-Host " across $assignmentsWithNC assignments" -NoNewline -ForegroundColor DarkGray
-$ncLine = "│  Non-Compliant: $totalNCResources resources across $assignmentsWithNC assignments│"
+$ncSummary = switch ($complianceAssessment.State) {
+    'NotEvaluated' { 'Not evaluated' }
+    'DataUnavailable' { 'Data unavailable' }
+    default { "$totalNCResources assignment-resource observations across $assignmentsWithNC assignments" }
+}
+$ncColor = switch ($complianceAssessment.State) {
+    'EvaluatedNonCompliant' { 'Red' }
+    'EvaluatedCompliant' { 'Green' }
+    default { 'Yellow' }
+}
+Write-Host $ncSummary -NoNewline -ForegroundColor $ncColor
+$ncLine = "│  Non-Compliant: $ncSummary│"
 $padding2 = 77 - $ncLine.Length
 if ($padding2 -lt 0) { $padding2 = 0 }
 Write-Host (" " * $padding2) -NoNewline
@@ -7805,8 +9089,8 @@ Write-Host "│" -ForegroundColor Cyan
 Write-Host "│  Enforcement  : " -NoNewline -ForegroundColor Cyan
 Write-Host "$enforcedCount enforced" -NoNewline -ForegroundColor Green
 Write-Host " | " -NoNewline -ForegroundColor DarkGray
-Write-Host "$auditOnlyCount audit-only" -NoNewline -ForegroundColor Yellow
-$enfLine = "│  Enforcement  : $enforcedCount enforced | $auditOnlyCount audit-only│"
+Write-Host "$auditOnlyCount enforcement disabled" -NoNewline -ForegroundColor Yellow
+$enfLine = "│  Enforcement  : $enforcedCount enforced | $auditOnlyCount enforcement disabled│"
 $padding3 = 77 - $enfLine.Length
 if ($padding3 -lt 0) { $padding3 = 0 }
 Write-Host (" " * $padding3) -NoNewline
@@ -7837,35 +9121,12 @@ if ($totalExemptions -gt 0) {
 }
 Write-Host "└─────────────────────────────────────────────────────────────────────────────┘" -ForegroundColor Cyan
 
-# Top issues requiring attention
-if ($assignmentsWithNC -gt 0) {
+# Findings requiring attention
+if ($assessmentFindings.Count -gt 0) {
     Write-Host ""
-    Write-Host "  Top Non-Compliant Assignments:" -ForegroundColor Red
-    $topIssues = $results | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) } |
-        Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | Select-Object -First 10
-    $issueNum = 0
-    foreach ($issue in $topIssues) {
-        $issueNum++
-        $dName = if ($issue.'Display Name'.Length -gt 65) { $issue.'Display Name'.Substring(0, 62) + '...' } else { $issue.'Display Name' }
-        Write-Host "    $issueNum. " -NoNewline -ForegroundColor DarkGray
-        Write-Host "$(if ($issue.'Non-Compliant Resources' -match '^\d+$') { [int]$issue.'Non-Compliant Resources' } else { 0 }) NC" -NoNewline -ForegroundColor Red
-        Write-Host " | $dName" -ForegroundColor Yellow
-    }
-}
-
-# DoNotEnforce warnings
-if ($auditOnlyCount -gt 0) {
-    $highSecDoNotEnforce = $results | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' -and $_.'Security Impact' -eq 'High' }
-    if ($highSecDoNotEnforce.Count -gt 0) {
-        Write-Host ""
-        Write-Host "  High-Security Policies NOT Enforced ($($highSecDoNotEnforce.Count)):" -ForegroundColor Yellow
-        foreach ($dne in ($highSecDoNotEnforce | Select-Object -First 5)) {
-            $dName = if ($dne.'Display Name'.Length -gt 65) { $dne.'Display Name'.Substring(0, 62) + '...' } else { $dne.'Display Name' }
-            Write-Host "    • $dName" -ForegroundColor DarkYellow
-        }
-        if ($highSecDoNotEnforce.Count -gt 5) {
-            Write-Host "    ... and $($highSecDoNotEnforce.Count - 5) more" -ForegroundColor DarkGray
-        }
+    Write-Host "  Preliminary Assignment Findings (ALZ comparison follows later):" -ForegroundColor Red
+    foreach ($finding in ($assessmentFindings | Select-Object -First 10)) {
+        Write-Host "    [$($finding.Id)] $($finding.Severity) | $($finding.Category) | $($finding.Title)" -ForegroundColor Yellow
     }
 }
 
@@ -7879,36 +9140,40 @@ if ($QuickAssess) {
     Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
 
     # Overall posture verdict
-    $highSecDNE = @($results | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' -and $_.'Security Impact' -eq 'High' })
+    $highSecDNE = @($assessmentFindings | Where-Object { $_.Category -eq 'Enforcement Gap' -and $_.Severity -eq 'Critical' })
     $highRiskPolicies = @($results | Where-Object { $_.'Risk Level' -eq 'High' })
-    $verdict = if ($highRiskPolicies.Count -eq 0 -and $totalNCResources -eq 0 -and $auditOnlyCount -eq 0) { '✅ Excellent' }
-               elseif ($highSecDNE.Count -eq 0 -and $totalNCResources -le 10) { '🟢 Good' }
-               elseif ($highRiskPolicies.Count -le 5 -and $totalNCResources -le 50) { '🟠 Needs Improvement' }
-               else { '🔴 At Risk' }
+    $verdict = Resolve-QuickAssessmentPosture `
+        -ComplianceState $complianceAssessment.State `
+        -HighRiskPolicyCount $highRiskPolicies.Count `
+        -HighSecurityDoNotEnforceCount $highSecDNE.Count `
+        -NonCompliantObservationCount $totalNCResources `
+        -AuditOnlyCount $auditOnlyCount
     Write-Host "  Posture: $verdict" -ForegroundColor White
     Write-Host "  Enforcement Rate: $([math]::Round(($enforcedCount / [math]::Max($results.Count,1)) * 100))%" -ForegroundColor White
-    if ($totalNCResources -gt 0) {
-        Write-Host "  Non-Compliant Resources: $totalNCResources across $assignmentsWithNC assignments" -ForegroundColor Red
+    if ($complianceAssessment.State -eq 'DataUnavailable') {
+        Write-Host "  Non-Compliant Resources: Data unavailable" -ForegroundColor Yellow
+    } elseif ($complianceAssessment.State -eq 'NotEvaluated') {
+        Write-Host "  Non-Compliant Resources: Not evaluated" -ForegroundColor Yellow
+    } elseif ($totalNCResources -gt 0) {
+        Write-Host "  Non-Compliant Observations: $totalNCResources across $assignmentsWithNC assignments" -ForegroundColor Red
     } else {
         Write-Host "  Non-Compliant Resources: 0 ✓" -ForegroundColor Green
     }
 
-    # Top 5 enforcement gaps
+    # Top 5 enforcement gaps from central findings
     if ($highSecDNE.Count -gt 0) {
         Write-Host "`n  ⚠️  Top Enforcement Gaps (high-security, not enforced):" -ForegroundColor Yellow
         $highSecDNE | Select-Object -First 5 | ForEach-Object {
-            $dn = if ($_.'Display Name'.Length -gt 60) { $_.'Display Name'.Substring(0, 57) + '...' } else { $_.'Display Name' }
-            Write-Host "    • $dn [$($_.'Effect Type')]" -ForegroundColor DarkYellow
+            Write-Host "    • [$($_.Id)] $($_.Title)" -ForegroundColor DarkYellow
         }
     }
 
-    # Top 5 NC assignments
-    $topNCQuick = $results | Where-Object { ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) } | Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | Select-Object -First 5
+    # Top 5 non-compliance findings
+    $topNCQuick = $assessmentFindings | Where-Object Category -eq 'Non-Compliance' | Sort-Object { $_.Evidence.NonCompliantResources } -Descending | Select-Object -First 5
     if ($topNCQuick.Count -gt 0) {
         Write-Host "`n  🔴 Top Non-Compliant Assignments:" -ForegroundColor Red
         foreach ($nc in $topNCQuick) {
-            $dn = if ($nc.'Display Name'.Length -gt 55) { $nc.'Display Name'.Substring(0, 52) + '...' } else { $nc.'Display Name' }
-            Write-Host "    $(if ($nc.'Non-Compliant Resources' -match '^\d+$') { [int]$nc.'Non-Compliant Resources' } else { 0 }) NC | $dn" -ForegroundColor Yellow
+            Write-Host "    $($nc.Evidence.NonCompliantResources) NC | [$($nc.Id)] $($nc.Title)" -ForegroundColor Yellow
         }
     }
 
@@ -7925,197 +9190,16 @@ if ($QuickAssess) {
 
     # Quick recommendations
     Write-Host "`n  💡 Key Actions:" -ForegroundColor Cyan
-    $actionNum = 0
-    if ($highSecDNE.Count -gt 0) { $actionNum++; Write-Host "    $actionNum. Enable enforcement on $($highSecDNE.Count) high-security audit-only policies" -ForegroundColor White }
-    if ($totalNCResources -gt 10) { $actionNum++; Write-Host "    $actionNum. Remediate $totalNCResources non-compliant resources (start with top 5)" -ForegroundColor White }
-    $scopesNoDenyQuick = @($results | Group-Object 'Scope Name' | Where-Object { ($_.Group | Where-Object { $_.'Effect Type' -eq 'Deny' }).Count -eq 0 })
-    if ($scopesNoDenyQuick.Count -gt 0) { $actionNum++; Write-Host "    $actionNum. Add Deny policies to $($scopesNoDenyQuick.Count) scope(s) without preventive controls" -ForegroundColor White }
-    $disabledQuick = @($results | Where-Object { $_.'Effect Type' -eq 'Disabled' })
-    if ($disabledQuick.Count -gt 0) { $actionNum++; Write-Host "    $actionNum. Review $($disabledQuick.Count) disabled policies — remove or re-enable" -ForegroundColor White }
-    if ($actionNum -eq 0) { Write-Host "    No critical actions needed. Continue monitoring." -ForegroundColor Green }
+    $quickActions = @($assessmentActions | Select-Object -First 5)
+    for ($actionIndex = 0; $actionIndex -lt $quickActions.Count; $actionIndex++) {
+        $action = $quickActions[$actionIndex]
+        Write-Host "    $($actionIndex + 1). [$(@($action.FindingIds) -join ', ')] $($action.Action)" -ForegroundColor White
+    }
+    if ($quickActions.Count -eq 0) { Write-Host "    No critical actions needed. Continue monitoring." -ForegroundColor Green }
 
     Write-Host ""
     Write-Host "  Use -Full for a comprehensive report or -ExportHTML for the full HTML report." -ForegroundColor DarkGray
     Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# AI METRICS GATHERING — collect data now; actual AI call deferred to after ALZ
-# ═══════════════════════════════════════════════════════════════════════════
-if ($EnableAI -and $script:AIProviderConfig) {
-
-    # Gather top NC assignments for AI context
-    $topNCForAI = @($results | Where-Object {
-        ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0)
-    } | Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | Select-Object -First 10 | ForEach-Object {
-        @{ displayName = $_.'Display Name'; ncCount = [int]$_.'Non-Compliant Resources'; effect = $_.'Effect Type'; scope = $_.'Scope Name' }
-    })
-
-    # Gather high-security audit-only policies for AI context
-    $highSecDNEForAI = @($results | Where-Object {
-        $_.'Enforcement Mode' -eq 'DoNotEnforce' -and $_.'Security Impact' -eq 'High'
-    } | Select-Object -First 10 | ForEach-Object {
-        @{ displayName = $_.'Display Name'; effect = $_.'Effect Type'; scope = $_.'Scope Name' }
-    })
-
-    # Gather category breakdown
-    $categoryBreakdownForAI = @($results | Where-Object { $_.'Category' -and $_.'Category' -ne '' } |
-        Group-Object 'Category' | Sort-Object Count -Descending | Select-Object -First 10 | ForEach-Object {
-        @{ category = $_.Name; count = $_.Count }
-    })
-
-    # Build metrics payload (AI sees ONLY these aggregated numbers)
-    $aiMetrics = @{
-        totalAssignments          = $results.Count
-        policyCount               = $policyCount
-        initiativeCount           = $classicInitCount
-        regulatoryCount           = $regulatoryInitCount
-        enforcedCount             = $enforcedCount
-        auditOnlyCount            = $auditOnlyCount
-        enforcementRatePercent    = [math]::Round(($enforcedCount / [math]::Max($results.Count, 1)) * 100)
-        totalNonCompliantResources = $totalNCResources
-        assignmentsWithNC         = $assignmentsWithNC
-        highRiskPolicies          = @($results | Where-Object { $_.'Risk Level' -eq 'High' }).Count
-        highSecurityPolicies      = @($results | Where-Object { $_.'Security Impact' -eq 'High' }).Count
-        highCostPolicies          = @($results | Where-Object { $_.'Cost Impact' -eq 'High' }).Count
-        highSecurityDoNotEnforce  = $highSecDNEForAI.Count
-        disabledPolicies          = @($results | Where-Object { $_.'Effect Type' -eq 'Disabled' }).Count
-        totalExemptions           = $totalExemptions
-        activeExemptions          = $activeExemptions
-        scopeBreakdown            = @{ mg = $mgAssignments; sub = $subAssignments; rg = $rgAssignments }
-        topNCAssignments          = $topNCForAI
-        highSecAuditOnly          = $highSecDNEForAI
-        categoryBreakdown         = $categoryBreakdownForAI
-        mode                      = $AIMode
-    }
-
-    # Add effect type breakdown for architectural context
-    $effectBreakdown = @($results | Group-Object 'Effect Type' | Sort-Object Count -Descending | Select-Object -First 10 | ForEach-Object {
-        @{ effect = $_.Name; count = $_.Count }
-    })
-    $aiMetrics['effectTypeBreakdown'] = $effectBreakdown
-
-    # Add security posture metrics
-    $denyCount = @($results | Where-Object { $_.'Effect Type' -eq 'Deny' -or $_.'Effect Type' -eq 'deny' }).Count
-    $dineCount = @($results | Where-Object { $_.'Effect Type' -match 'DeployIfNotExists|deployIfNotExists' }).Count
-    $modifyCount = @($results | Where-Object { $_.'Effect Type' -eq 'Modify' -or $_.'Effect Type' -eq 'modify' }).Count
-    $auditEffectCount = @($results | Where-Object { $_.'Effect Type' -in @('Audit','AuditIfNotExists','auditIfNotExists') }).Count
-    $aiMetrics['securityControls'] = @{
-        denyPolicies    = $denyCount
-        dinePolicies    = $dineCount
-        modifyPolicies  = $modifyCount
-        auditPolicies   = $auditEffectCount
-    }
-
-    # Add top high-cost policies for cost analysis
-    $topCostForAI = @($results | Where-Object { $_.'Cost Impact' -eq 'High' } | Select-Object -First 5 | ForEach-Object {
-        @{ displayName = $_.'Display Name'; effect = $_.'Effect Type'; scope = $_.'Scope Name'; costImpact = $_.'Cost Impact' }
-    })
-    $aiMetrics['topHighCostPolicies'] = $topCostForAI
-
-    # Add ALL high-cost policies with enforcement mode for cost analysis
-    $allCostForAI = @($results | Where-Object { $_.'Cost Impact' -eq 'High' } | ForEach-Object {
-        @{
-            displayName     = $_.'Display Name'
-            effect          = $_.'Effect Type'
-            enforcementMode = $_.'Enforcement Mode'
-            scope           = $_.'Scope Name'
-            scopeType       = $_.'Scope Type'
-            category        = $_.'Category'
-            operationalOverhead = $_.'Operational Overhead'
-            ncResources     = if ($_.'Non-Compliant Resources' -match '^\d+$') { [int]$_.'Non-Compliant Resources' } else { 0 }
-        }
-    })
-    $aiMetrics['allHighCostPolicies'] = $allCostForAI
-
-    # Cost breakdown: how many high-cost are enforced vs audit-only
-    $costEnforced = @($results | Where-Object { $_.'Cost Impact' -eq 'High' -and $_.'Enforcement Mode' -eq 'Default' }).Count
-    $costAuditOnly = @($results | Where-Object { $_.'Cost Impact' -eq 'High' -and $_.'Enforcement Mode' -eq 'DoNotEnforce' }).Count
-    $aiMetrics['costEnforcementBreakdown'] = @{
-        enforcedHighCost  = $costEnforced
-        auditOnlyHighCost = $costAuditOnly
-        note = 'Audit-only high-cost DINE policies incur zero cost but provide zero protection. Enforced DINE policies deploy agents and resources with real cost.'
-    }
-
-    # Medium cost policies count for context
-    $aiMetrics['mediumCostPolicies'] = @($results | Where-Object { $_.'Cost Impact' -eq 'Medium' }).Count
-    $aiMetrics['lowCostPolicies'] = @($results | Where-Object { $_.'Cost Impact' -eq 'Low' }).Count
-
-    # Add per-category non-compliance for compliance analysis
-    $ncByCategory = @($results | Where-Object {
-        ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0) -and $_.'Category'
-    } | Group-Object 'Category' | ForEach-Object {
-        $catNC = ($_.Group | ForEach-Object { [int]$_.'Non-Compliant Resources' } | Measure-Object -Sum).Sum
-        @{ category = $_.Name; ncResources = $catNC; assignmentCount = $_.Count }
-    } | Sort-Object { $_.ncResources } -Descending | Select-Object -First 8)
-    $aiMetrics['nonComplianceByCategory'] = $ncByCategory
-
-    # Add detailed NC assignment analysis for compliance section
-    $ncDetailForAI = @($results | Where-Object {
-        ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0)
-    } | Sort-Object { [int]$_.'Non-Compliant Resources' } -Descending | Select-Object -First 10 | ForEach-Object {
-        @{
-            displayName     = $_.'Display Name'
-            ncResources     = [int]$_.'Non-Compliant Resources'
-            totalResources  = if ($_.'Total Resources' -match '^\d+$') { [int]$_.'Total Resources' } else { 0 }
-            effect          = $_.'Effect Type'
-            enforcementMode = $_.'Enforcement Mode'
-            category        = $_.'Category'
-            securityImpact  = $_.'Security Impact'
-            riskLevel       = $_.'Risk Level'
-            scope           = $_.'Scope Name'
-            recommendation  = $_.'Recommendation'
-            isDINE          = $_.'Effect Type' -match 'DeployIfNotExists|deployIfNotExists'
-        }
-    })
-    $aiMetrics['ncAssignmentDetail'] = $ncDetailForAI
-
-    # Compliance gap indicators
-    $dineWithNC = @($results | Where-Object {
-        ($_.'Effect Type' -match 'DeployIfNotExists|deployIfNotExists|Modify|modify') -and
-        ($_.'Non-Compliant Resources' -match '^\d+$') -and ([int]$_.'Non-Compliant Resources' -gt 0)
-    }).Count
-    $aiMetrics['remediationReviewCount'] = $dineWithNC
-    $aiMetrics['remediationReviewNote'] = 'DINE/Modify non-compliance requires checking remediation task status, evaluation timing, scope, and assignment identity permissions; it does not by itself prove broken auto-remediation.'
-
-    # Add risk level and compliance impact distributions
-    $aiMetrics['riskDistribution'] = @{
-        high   = @($results | Where-Object { $_.'Risk Level' -eq 'High' }).Count
-        medium = @($results | Where-Object { $_.'Risk Level' -eq 'Medium' }).Count
-        low    = @($results | Where-Object { $_.'Risk Level' -eq 'Low' }).Count
-    }
-    $aiMetrics['complianceImpactDistribution'] = @{
-        high   = @($results | Where-Object { $_.'Compliance Impact' -eq 'High' }).Count
-        medium = @($results | Where-Object { $_.'Compliance Impact' -eq 'Medium' }).Count
-        low    = @($results | Where-Object { $_.'Compliance Impact' -eq 'Low' }).Count
-    }
-
-    # Add top scope names for architectural context
-    $topScopes = @($results | Group-Object 'Scope Name' | Sort-Object Count -Descending | Select-Object -First 8 | ForEach-Object {
-        @{ scopeName = $_.Name; assignmentCount = $_.Count }
-    })
-    $aiMetrics['topScopes'] = $topScopes
-
-    # Add delta data if available
-    if ($DeltaYAML -and $yamlDeltaData) {
-        $aiMetrics['deltaData'] = @{
-            previousDate       = $yamlDeltaData.PreviousDate
-            assignmentDelta    = $yamlDeltaData.AssignmentDelta
-            ncDelta            = $yamlDeltaData.NCDelta
-            highDelta          = $yamlDeltaData.HighDelta
-            enfDelta           = $yamlDeltaData.EnfDelta
-            trend              = $yamlDeltaData.Trend
-            newAssignmentCount = $yamlDeltaData.NewAssignments.Count
-            removedCount       = $yamlDeltaData.RemovedAssignments.Count
-            changedCount       = $yamlDeltaData.ChangedAssignments.Count
-        }
-    }
-
-    # Build prompt and call AI — deferred to after ALZ data is computed (see below)
-    # AI metrics are stored in $script:AIMetricsPayload for the deferred call
-    $script:AIMetricsPayload = $aiMetrics
-
-    # Display insights — will be shown after ALZ section
 }
 
 # Generate overall assessment & recommendations (always runs)
@@ -8126,13 +9210,13 @@ $totalPolicies = $results.Count
 $totalInitiatives = $classicInitCount
 $totalSinglePolicies = $policyCount
 $highSecurityPolicies = ($results | Where-Object { $_.'Security Impact' -eq 'High' }).Count
-$highCostPolicies = ($results | Where-Object { $_.'Cost Impact' -eq 'High' }).Count
+$highCostPolicies = @($assessmentFindings | Where-Object Category -eq 'Cost Exposure').Count
 $doNotEnforcePolicies = $auditOnlyCount
 $defaultEnforcePolicies = $enforcedCount
 $highRiskPolicies = ($results | Where-Object { $_.'Risk Level' -eq 'High' }).Count
 
 # Count effect types
-$effectTypeCounts = $results | Group-Object 'Effect Type' | Sort-Object Count -Descending
+$effectTypeCounts = (Get-EffectivePolicyEffectCounts -PolicyResults @($results)).Breakdown | Sort-Object Count -Descending
 
 Write-Host "`nSummary Statistics:" -ForegroundColor Yellow
 Write-Host "  Total Policy Assignments: $totalPolicies" -ForegroundColor White
@@ -8154,17 +9238,13 @@ Write-Host "    • DoNotEnforce: $doNotEnforcePolicies" -ForegroundColor Gray
 
 Write-Host "`n  Effect Types:" -ForegroundColor White
 foreach ($effect in $effectTypeCounts) {
-    $effectName = if ([string]::IsNullOrWhiteSpace($effect.Name) -or $effect.Name -eq '(not specified)') { 
-        '(not specified)' 
-    } else { 
-        $effect.Name 
-    }
+    $effectName = $effect.Effect
     Write-Host "    • $($effectName): $($effect.Count)" -ForegroundColor Gray
 }
 
 Write-Host "`n  Impact Analysis:" -ForegroundColor White
 Write-Host "    • High Security Impact: $highSecurityPolicies" -ForegroundColor Gray
-Write-Host "    • High Cost Impact: $highCostPolicies" -ForegroundColor Gray
+Write-Host "    • Cost exposure: High: $highCostPolicies" -ForegroundColor Gray
 Write-Host "    • High Risk Level: $highRiskPolicies" -ForegroundColor Gray
 
 # Get recommended Azure Landing Zone policies (dynamically from GitHub or fallback)
@@ -8172,38 +9252,64 @@ $recommendedALZPolicies = Get-ALZRecommendedPolicies -ALZVersion 'latest'
 
 Write-Host "`nAzure Landing Zone Policy Coverage Analysis:" -ForegroundColor Yellow
 Write-Host "(Based on official Azure Landing Zone Bicep repository)" -ForegroundColor Gray
+Write-Host "Source: $($script:ALZSourceVersion) | Retrieved: $($script:ALZSourceRetrievedAt)" -ForegroundColor Gray
 
 $missingCriticalPolicies = [System.Collections.Generic.List[object]]::new()
 $doNotEnforceALZPolicies = [System.Collections.Generic.List[object]]::new()
 $matchedALZPolicies = [System.Collections.Generic.List[object]]::new()
-$assignedPoliciesWithEnforcement = $results | Select-Object 'Assignment Name', 'Policy Name', 'Policy Definition ID', 'Display Name', 'Enforcement Mode'
+$alzAssetAssessments = [System.Collections.Generic.List[object]]::new()
+$consumedALZAssignmentKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$assignedPoliciesWithEnforcement = $results | Select-Object 'Assignment ID', 'Assignment Name', 'Policy Name', 'Policy Definition ID', 'Display Name', 'Enforcement Mode', 'Parameters', 'Scope', 'Scope Name'
+$structuredALZAssets = @($script:ALZAssets)
 
 foreach ($category in $recommendedALZPolicies.Keys) {
     if ($recommendedALZPolicies[$category].Count -eq 0) { continue }
     
     Write-Host "`n  $category" -ForegroundColor Cyan
     foreach ($policy in $recommendedALZPolicies[$category]) {
-        # Prefer the immutable policy definition ID from the official ALZ asset.
-        $officialDefinitionId = $script:ALZPolicyDefinitionIds[$policy]
-        $matchingPolicies = if ($officialDefinitionId) {
-            $assignedPoliciesWithEnforcement | Where-Object {
-                "$($_.'Policy Definition ID')".ToLowerInvariant() -eq $officialDefinitionId
-            }
-        } else {
-            $assignedPoliciesWithEnforcement | Where-Object {
-                $_.'Assignment Name' -eq $policy -or $_.'Policy Name' -eq $policy -or $_.'Display Name' -eq $policy
-            }
-        }
+        $asset = $structuredALZAssets | Where-Object AssetName -EQ $policy | Select-Object -First 1
+        $officialDefinitionId = if ($asset) { $asset.DefinitionId } else { $script:ALZPolicyDefinitionIds[$policy] }
+        $sharedDefinitionIdCount = if ($officialDefinitionId) {
+            @($structuredALZAssets | Where-Object DefinitionId -EQ $officialDefinitionId).Count
+        } else { 1 }
+        $matchingPolicies = Find-ALZMatchingAssignments -AssetName $policy `
+            -OfficialDefinitionId $officialDefinitionId `
+            -AssetParameters $(if ($asset) { $asset.Parameters } else { $null }) `
+            -Archetype $(if ($asset) { $asset.Archetype } else { '' }) `
+            -SharedDefinitionIdCount $sharedDefinitionIdCount `
+            -ConsumedAssignmentKeys $consumedALZAssignmentKeys `
+            -Assignments @($assignedPoliciesWithEnforcement)
         
-        if ($matchingPolicies) {
-            # Check if any matching policy is in DoNotEnforce mode
-            $doNotEnforceMatch = $matchingPolicies | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' }
-            if ($doNotEnforceMatch) {
+        $matchState = Resolve-ALZPolicyMatchState -MatchingAssignments @($matchingPolicies)
+        $selectedMatch = @($matchingPolicies | Sort-Object @{ Expression = { if ($_.'Enforcement Mode' -eq 'Default') { 0 } else { 1 } } }, 'Assignment Name' | Select-Object -First 1)
+        if ($selectedMatch.Count -gt 0) {
+            $assignmentKey = if ($selectedMatch[0].'Assignment ID') { [string]$selectedMatch[0].'Assignment ID' } else { "$($selectedMatch[0].'Assignment Name')|$($selectedMatch[0].Scope)" }
+            [void]$consumedALZAssignmentKeys.Add($assignmentKey)
+            $matchingPolicies = @($selectedMatch)
+            $matchState = Resolve-ALZPolicyMatchState -MatchingAssignments $matchingPolicies
+        }
+        $applicabilityAssessed = $asset -and $asset.PSObject.Properties['Applicable']
+        $applicable = if ($applicabilityAssessed) { [Nullable[bool]]$asset.Applicable } else { $null }
+        $assetState = Resolve-ALZAssetState -MatchState $matchState -Applicable $applicable -ApplicabilityAssessed:$applicabilityAssessed
+        [void]$alzAssetAssessments.Add([PSCustomObject][ordered]@{
+            Category = $category
+            AssetName = $policy
+            DefinitionId = $officialDefinitionId
+            Archetype = if ($asset) { $asset.Archetype } else { '' }
+            ParameterSignature = if ($asset) { $asset.ParameterSignature } else { '' }
+            State = $assetState
+            MatchState = $matchState
+            AssignmentId = if ($selectedMatch.Count -gt 0) { $selectedMatch[0].'Assignment ID' } else { '' }
+            AssignmentName = if ($selectedMatch.Count -gt 0) { $selectedMatch[0].'Assignment Name' } else { '' }
+        })
+        if ($matchState -ne 'Missing') {
+            if ($matchState -eq 'DoNotEnforce') {
+                $doNotEnforceMatch = $matchingPolicies | Where-Object { $_.'Enforcement Mode' -eq 'DoNotEnforce' } | Select-Object -First 1
                 Write-Host "    ⚠️  $policy (DoNotEnforce)" -ForegroundColor Yellow
                 [void]$doNotEnforceALZPolicies.Add([PSCustomObject]@{
                     Category = $category
                     PolicyName = $policy
-                    ActualName = $doNotEnforceMatch[0].'Policy Name'
+                    ActualName = $doNotEnforceMatch.'Policy Name'
                 })
             } else {
                 Write-Host "    ✓ $policy" -ForegroundColor Green
@@ -8212,18 +9318,19 @@ foreach ($category in $recommendedALZPolicies.Keys) {
                     PolicyName = $policy
                 })
             }
+        } elseif ($assetState -eq 'Applicable gap') {
+            Write-Host "    ✗ $policy (APPLICABLE GAP)" -ForegroundColor Red
+            [void]$missingCriticalPolicies.Add([PSCustomObject]@{ Category = $category; PolicyPattern = $policy; State = $assetState })
+        } elseif ($assetState -eq 'Not applicable') {
+            Write-Host "    − $policy (NOT APPLICABLE)" -ForegroundColor DarkGray
         } else {
-            Write-Host "    ✗ $policy (MISSING)" -ForegroundColor Red
-            [void]$missingCriticalPolicies.Add([PSCustomObject]@{
-                Category = $category
-                PolicyPattern = $policy
-            })
+            Write-Host "    ? $policy ($($assetState.ToUpperInvariant()))" -ForegroundColor DarkGray
         }
     }
 }
 
 # Build ALZ data hashtable for HTML report
-$alzTotalRecommended = ($recommendedALZPolicies.Values | ForEach-Object { $_.Count } | Measure-Object -Sum).Sum
+$alzTotalRecommended = $alzAssetAssessments.Count
 $alzData = @{
     RecommendedPolicies    = $recommendedALZPolicies
     MatchedPolicies        = $matchedALZPolicies
@@ -8233,106 +9340,91 @@ $alzData = @{
     TotalMatched           = $matchedALZPolicies.Count
     TotalMissing           = $missingCriticalPolicies.Count
     TotalDoNotEnforce      = $doNotEnforceALZPolicies.Count
+    AssetAssessments       = @($alzAssetAssessments)
+    TotalNotDetected       = @($alzAssetAssessments | Where-Object MatchState -eq 'Missing').Count
+    TotalApplicabilityNotAssessed = @($alzAssetAssessments | Where-Object State -eq 'Applicability not assessed').Count
+    TotalNotApplicable     = @($alzAssetAssessments | Where-Object State -eq 'Not applicable').Count
     CoveragePercent        = if ($alzTotalRecommended -gt 0) { [math]::Round((($matchedALZPolicies.Count + $doNotEnforceALZPolicies.Count) / $alzTotalRecommended) * 100) } else { 0 }
     EnforcedCoveragePercent = if ($alzTotalRecommended -gt 0) { [math]::Round(($matchedALZPolicies.Count / $alzTotalRecommended) * 100) } else { 0 }
     SourceVersion          = $script:ALZSourceVersion
+    SourceRetrievedAt      = $script:ALZSourceRetrievedAt
 }
 
-# ═══════════════════════════════════════════════════════════════════════════
-# AI EXECUTIVE INSIGHTS — runs after ALZ data is available for full context
-# ═══════════════════════════════════════════════════════════════════════════
-if ($EnableAI -and $script:AIProviderConfig -and $script:AIMetricsPayload) {
-    # Inject ALZ coverage data now that it's computed
-    $script:AIMetricsPayload['alzCoverage'] = @{
-        totalRecommended       = $alzData.TotalRecommended
-        totalMatched           = $alzData.TotalMatched
-        totalMissing           = $alzData.TotalMissing
-        totalDoNotEnforce      = $alzData.TotalDoNotEnforce
-        coveragePercent        = $alzData.CoveragePercent
-        enforcedCoveragePercent = $alzData.EnforcedCoveragePercent
+$assessmentFindings = @(New-AssessmentFindings -PolicyResults @($results) -ALZData $alzData)
+$assessmentActions = @(ConvertTo-AssessmentActions -AssessmentFindings $assessmentFindings)
+
+# CEP state exists for every run and is resolved before report consumers use assessment evidence.
+$cepAssessment = if ($CEP -eq 'Off') {
+    New-CEPAssessment -Requested $false -State NotRequested
+} else {
+    New-CEPAssessment `
+        -Requested $true `
+        -State PartiallyEvaluated `
+        -MappingState $(if ($ShowCEPCompliance) { 'Pending' } else { 'NotRequested' }) `
+        -TestState $(if ($RunCEPTests) { 'Pending' } else { 'NotRequested' })
+}
+
+if ($RunCEPTests) {
+    $cepResult = Invoke-CEPComplianceTests -PolicyAssignments $argResults -DefinitionId $CEPDefinitionId -DefinitionVersion $CEPDefinitionVersion
+    $cepAssessment = $cepResult.Assessment
+    $cepTestResults = if ($cepResult.TestResults) { $cepResult.TestResults } else { @() }
+    $cepPerScopeData = if ($cepResult.PerScopeData) { $cepResult.PerScopeData } else { @() }
+    $cepPerScopeGroupData = if ($cepResult.PerScopeGroupData) { $cepResult.PerScopeGroupData } else { @{} }
+    $cepPerScopeGroupRaw = if ($cepResult.PerScopeGroupRaw) { $cepResult.PerScopeGroupRaw } else { @{} }
+    $cepRefIdToGroupDisplay = if ($cepResult.RefIdToGroupDisplay) { $cepResult.RefIdToGroupDisplay } else { @{} }
+
+    if ($ExportCEPCompliance -and $cepTestResults -and $cepTestResults.Count -gt 0) {
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $testFileName = "CEP_TestResults_$timestamp.csv"
+        $testFilePath = Join-Path -Path (Get-Location) -ChildPath $testFileName
+        $cepTestResults | Export-Csv -Path $testFilePath -NoTypeInformation -Encoding UTF8
+        Write-Host "`n✓ CE/CE+ test results exported to: $testFilePath" -ForegroundColor Green
     }
-
-    # Add ALZ gap categories for detailed analysis
-    $alzGapsByCategory = @($missingCriticalPolicies | Group-Object Category | ForEach-Object {
-        @{ category = $_.Name; missingCount = $_.Count; policies = @($_.Group | ForEach-Object { $_.PolicyPattern }) }
-    })
-    $script:AIMetricsPayload['alzGapsByCategory'] = $alzGapsByCategory
-
-    # Add ALZ DoNotEnforce detail
-    $alzDNEByCategory = @($doNotEnforceALZPolicies | Group-Object Category | ForEach-Object {
-        @{ category = $_.Name; count = $_.Count; policies = @($_.Group | ForEach-Object { $_.PolicyName }) }
-    })
-    $script:AIMetricsPayload['alzDoNotEnforceByCategory'] = $alzDNEByCategory
-
-    Write-Host "`n═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
-    Write-Host "  🤖 Generating AI Executive Insights..." -ForegroundColor Magenta
-    Write-Host "═══════════════════════════════════════════════════════════════════════════════" -ForegroundColor Magenta
-
-    $aiRequestBody = New-AIPromptPayload -Mode $AIMode -Metrics $script:AIMetricsPayload -AIConfig $script:AIProviderConfig
-    $script:AIInsightsResult = Invoke-AIAnalysis -AIConfig $script:AIProviderConfig -RequestBody $aiRequestBody -Metrics $script:AIMetricsPayload
-    Show-AIInsights -AIResult $script:AIInsightsResult -Mode $AIMode
 }
 
-# Overall recommendations
+$cepFindings = @(New-CEPAssessmentFindings -CEPAssessment $cepAssessment -CEPTestResults $(if ($cepTestResults) { $cepTestResults } else { @() }))
+if ($cepFindings.Count -gt 0) {
+    $assessmentFindings = @($assessmentFindings + $cepFindings | Sort-Object Id -Unique)
+    $assessmentActions = @(ConvertTo-AssessmentActions -AssessmentFindings $assessmentFindings)
+}
+
+$costEvidenceRecords = @()
+if ($CostEvidence -in @('RetailPrices', 'All')) {
+    if (-not $CostRegion -or @($CostServiceName).Count -eq 0) {
+        Write-Host 'Retail Prices evidence skipped: specify -CostRegion and -CostServiceName.' -ForegroundColor Yellow
+    } else {
+        try {
+            $costEvidenceRecords += @(Get-AzureRetailPriceEvidence -Region $CostRegion -Currency $CostCurrency -ServiceNames $CostServiceName)
+        } catch {
+            Write-Host "Retail Prices evidence unavailable: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+}
+if ($CostEvidence -in @('CostManagement', 'All')) {
+    if (-not $resolvedSubscription -or -not $resolvedSubscription.Id) {
+        Write-Host 'Cost Management evidence skipped: no resolved subscription is available.' -ForegroundColor Yellow
+    } else {
+        try {
+            $costEvidenceRecords += @(Get-AzureCostManagementEvidence -SubscriptionId $resolvedSubscription.Id -LookbackDays $CostLookbackDays)
+        } catch {
+            Write-Host "Cost Management evidence unavailable: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+}
+$costEvidenceRecords = @($costEvidenceRecords | Where-Object { Test-CostEvidenceRecord -Record $_ })
+if ($CostEvidence -ne 'Off') {
+    Write-Host "Official cost evidence records collected: $($costEvidenceRecords.Count)" -ForegroundColor Gray
+}
+
+# Overall recommendations from central findings
 Write-Host "`nKEY RECOMMENDATIONS:" -ForegroundColor Yellow
-
-if ($highRiskPolicies -gt 0) {
-    Write-Host "`n⚠️  HIGH PRIORITY:" -ForegroundColor Red
-    Write-Host "   $highRiskPolicies policies are marked as high risk (disabled or critical misconfigurations)."
-    Write-Host "   Review and remediate immediately." -ForegroundColor Red
-}
-
-if ($doNotEnforcePolicies -gt 0) {
-    Write-Host "`n⚠️  ENFORCEMENT:" -ForegroundColor Yellow
-    Write-Host "   $doNotEnforcePolicies policies are in DoNotEnforce mode."
-    Write-Host "   These are not actively protecting your environment. Consider enabling enforcement." -ForegroundColor Yellow
-    
-    # Show ALZ-recommended policies in DoNotEnforce mode
-    if ($doNotEnforceALZPolicies.Count -gt 0) {
-        Write-Host "`n   ⚠️  ALZ-Recommended Policies in DoNotEnforce Mode:" -ForegroundColor Yellow
-        $doNotEnforceByCategory = $doNotEnforceALZPolicies | Group-Object Category
-        foreach ($group in $doNotEnforceByCategory) {
-            Write-Host "`n      $($group.Name):" -ForegroundColor White
-            foreach ($item in $group.Group) {
-                Write-Host "        • $($item.ActualName) - DoNotEnforce" -ForegroundColor Gray
-            }
-        }
-        Write-Host "`n      These are recommended by Azure Landing Zones but not actively enforced." -ForegroundColor DarkYellow
-    }
-}
-
-if ($highCostPolicies -gt 0) {
-    Write-Host "`n💰 COST OPTIMIZATION:" -ForegroundColor Cyan
-    Write-Host "   $highCostPolicies policies have high cost impact."
-    
-    # List high cost impact policies
-    Write-Host "`n   High Cost Impact Policies:" -ForegroundColor White
-    $results | Where-Object { $_.'Cost Impact' -eq 'High' } | ForEach-Object {
-        $effectInfo = if ($_.'Effect Type' -ne '(not specified)') { "[$($_.'Effect Type')]" } else { "" }
-        Write-Host "     • $($_.'Policy Name') $effectInfo" -ForegroundColor Gray
-    }
-    
-    Write-Host "`n   Review these for budget planning. Consider:" -ForegroundColor Cyan
-    Write-Host "   - Backup policies: Ensure retention is optimized"
-    Write-Host "   - Monitoring policies: Use appropriate log retention"
-    Write-Host "   - Defender for Cloud: Verify only necessary workloads are covered"
-}
-
-if ($missingCriticalPolicies.Count -gt 0) {
-    Write-Host "`n🛡️  LANDING ZONE GAPS:" -ForegroundColor Magenta
-    Write-Host "   $($missingCriticalPolicies.Count) recommended Azure Landing Zone policies are missing."
-    Write-Host "   Consider implementing the following by category:" -ForegroundColor Magenta
-    
-    $missingByCategory = $missingCriticalPolicies | Group-Object Category
-    foreach ($group in $missingByCategory) {
-        Write-Host "`n   $($group.Name):" -ForegroundColor White
-        foreach ($item in $group.Group) {
-            Write-Host "     • $($item.PolicyPattern)" -ForegroundColor Gray
-        }
+if ($assessmentActions.Count -gt 0) {
+    for ($actionIndex = 0; $actionIndex -lt $assessmentActions.Count; $actionIndex++) {
+        $action = $assessmentActions[$actionIndex]
+        Write-Host "   $($actionIndex + 1). [$(@($action.FindingIds) -join ', ')] $($action.Action)" -ForegroundColor White
     }
 } else {
-    Write-Host "`n✓ LANDING ZONE COVERAGE:" -ForegroundColor Green
-    Write-Host "   Good coverage of recommended Azure Landing Zone policies." -ForegroundColor Green
+    Write-Host "   No finding-linked actions were identified." -ForegroundColor Green
 }
 
 # Security posture assessment
@@ -8375,48 +9467,6 @@ if ($highSecurityPolicies -gt 0) {
     Write-Host "   Your environment lacks essential security controls." -ForegroundColor Red
 }
 
-# Azure Landing Zone specific recommendations
-if ($alzGapCount -gt 0) {
-    Write-Host "`n   🛡️  AZURE LANDING ZONE RECOMMENDATIONS:" -ForegroundColor Cyan
-    Write-Host "   Missing $alzGapCount ALZ recommended policies that provide:" -ForegroundColor White
-    
-    # Categorize ALZ gaps by security impact
-    $alzSecurityGaps = $missingCriticalPolicies | Where-Object { 
-        $_.PolicyPattern -match "Deny|Block|Prevent|Disable|Restrict" 
-    }
-    $alzComplianceGaps = $missingCriticalPolicies | Where-Object { 
-        $_.PolicyPattern -match "Audit|Monitor|Log|Enable" 
-    }
-    $alzRemediationGaps = $missingCriticalPolicies | Where-Object { 
-        $_.PolicyPattern -match "Deploy|Configure|Enforce" 
-    }
-    
-    if ($alzSecurityGaps.Count -gt 0) {
-        Write-Host "      • Security Controls ($($alzSecurityGaps.Count) missing): Network isolation, access control, encryption" -ForegroundColor Red
-    }
-    if ($alzRemediationGaps.Count -gt 0) {
-        Write-Host "      • Auto-Remediation ($($alzRemediationGaps.Count) missing): Automated configuration and compliance" -ForegroundColor Yellow
-    }
-    if ($alzComplianceGaps.Count -gt 0) {
-        Write-Host "      • Monitoring & Audit ($($alzComplianceGaps.Count) missing): Visibility and compliance tracking" -ForegroundColor Yellow
-    }
-    
-    Write-Host "`n   📖 RECOMMENDED ACTIONS:" -ForegroundColor Cyan
-    Write-Host "   1. Review the 'LANDING ZONE GAPS' section above for specific missing policies" -ForegroundColor White
-    Write-Host "   2. Prioritize implementing Deny/Block policies for immediate security hardening" -ForegroundColor White
-    Write-Host "   3. Deploy monitoring and audit policies for compliance visibility" -ForegroundColor White
-    Write-Host "   4. Implement DeployIfNotExists policies for automated remediation" -ForegroundColor White
-    Write-Host "   5. Reference Azure Landing Zone documentation: https://aka.ms/alz" -ForegroundColor White
-}
-
-Write-Host "`n📋 BEST PRACTICES:" -ForegroundColor Yellow
-Write-Host "   1. Test blocking policies (Deny) in DoNotEnforce mode first" -ForegroundColor White
-Write-Host "   2. Regularly review audit logs for Audit policies and consider upgrading to Deny" -ForegroundColor White
-Write-Host "   3. Ensure DINE/Modify policies have proper managed identities and RBAC" -ForegroundColor White
-Write-Host "   4. Monitor policy compliance in Azure Policy compliance dashboard" -ForegroundColor White
-Write-Host "   5. Document exceptions using policy exemptions rather than disabling policies" -ForegroundColor White
-Write-Host "   6. Review policies quarterly for relevance and effectiveness" -ForegroundColor White
-
 # Cyber Essentials Compliance Analysis (dedicated switch)
 if ($ShowCEPCompliance) {
     # ══════════════════════════════════════════════════════════════════
@@ -8433,30 +9483,20 @@ if ($ShowCEPCompliance) {
     # Data structures for export
     $cepExportData = [System.Collections.Generic.List[object]]::new()
 
-    # ── Step 1: Find the CE v3.1 initiative ──
-    Write-Progress -Activity "CE Compliance" -Status "Searching for CE v3.1 initiative..." -PercentComplete 5 -Id 30
-    Write-Host "   Searching for Cyber Essentials v3.1 initiative definition..." -ForegroundColor Gray
-    $ceInitiative = $null
-    try {
-        $builtInSets = Get-AzPolicySetDefinition -BuiltIn -ErrorAction Stop
-        $ceInitiative = $builtInSets | Where-Object {
-            $_.DisplayName -like "*Cyber Essentials*v3*"
-        } | Select-Object -First 1
-
-        if (-not $ceInitiative) {
-            $ceInitiative = $builtInSets | Where-Object {
-                $_.DisplayName -like "*Cyber Essentials*"
-            } | Sort-Object DisplayName -Descending | Select-Object -First 1
-        }
-    } catch {
-        Write-Host "   ⚠️  Could not query policy set definitions: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
+    # ── Step 1: Resolve the configured CE initiative source ──
+    Write-Progress -Activity "CE Compliance" -Status "Resolving CE mapping source..." -PercentComplete 5 -Id 30
+    Write-Host "   Resolving Cyber Essentials v$CEPDefinitionVersion initiative definition..." -ForegroundColor Gray
+    $sourceResolution = Resolve-CEPMappingSource -DefinitionId $CEPDefinitionId -DefinitionVersion $CEPDefinitionVersion
+    $ceInitiative = $sourceResolution.Definition
 
     if (-not $ceInitiative) {
         Write-Progress -Activity "CE Compliance" -Completed -Id 30
-        Write-Host "   ❌ Cyber Essentials v3.1 initiative not found." -ForegroundColor Red
-        Write-Host "   Ensure the built-in 'UK NCSC Cyber Essentials v3.1' initiative is available in your tenant." -ForegroundColor Yellow
-        Write-Host "   Azure Portal > Policy > Definitions > Search 'Cyber Essentials'" -ForegroundColor Gray
+        Write-Host "   ⚠️  $($sourceResolution.Message)" -ForegroundColor Yellow
+        if ($sourceResolution.Candidates.Count -gt 0) {
+            Write-Host "   Candidate definitions:" -ForegroundColor Gray
+            $sourceResolution.Candidates | ForEach-Object { Write-Host "     • $($_.DisplayName) [$($_.Name)]" -ForegroundColor Gray }
+        }
+        Write-Host "   This discovery result does not imply incorrect tenant configuration." -ForegroundColor Gray
     } else {
         $ceInitiativeName = $ceInitiative.Name
         $ceInitiativeDisplayName = $ceInitiative.DisplayName
@@ -9207,25 +10247,6 @@ $ncScopeFilter
     }
 }
 
-# Run CE/CE+ Compliance Tests if requested
-if ($RunCEPTests) {
-    $cepResult = Invoke-CEPComplianceTests -PolicyAssignments $argResults
-    $cepTestResults = if ($cepResult.TestResults) { $cepResult.TestResults } else { @() }
-    $cepPerScopeData = if ($cepResult.PerScopeData) { $cepResult.PerScopeData } else { @() }
-    $cepPerScopeGroupData = if ($cepResult.PerScopeGroupData) { $cepResult.PerScopeGroupData } else { @{} }
-    $cepPerScopeGroupRaw = if ($cepResult.PerScopeGroupRaw) { $cepResult.PerScopeGroupRaw } else { @{} }
-    $cepRefIdToGroupDisplay = if ($cepResult.RefIdToGroupDisplay) { $cepResult.RefIdToGroupDisplay } else { @{} }
-    
-    # Export test results if -ExportCEPCompliance is also specified
-    if ($ExportCEPCompliance -and $cepTestResults -and $cepTestResults.Count -gt 0) {
-        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-        $testFileName = "CEP_TestResults_$timestamp.csv"
-        $testFilePath = Join-Path -Path (Get-Location) -ChildPath $testFileName
-        $cepTestResults | Export-Csv -Path $testFilePath -NoTypeInformation -Encoding UTF8
-        Write-Host "`n✓ CE/CE+ test results exported to: $testFilePath" -ForegroundColor Green
-    }
-}
-
 # ═══════════════════════════════════════════════════════════════════════════
 # YAML DELTA — compute delta data early so HTML report can use it
 # ═══════════════════════════════════════════════════════════════════════════
@@ -9410,16 +10431,10 @@ $ncHtmlFilter
     $htmlResults = if ($results -and $results.Count -gt 0) { $results } else { @() }
     $htmlCompliance = if ($complianceData) { $complianceData } else { @{} }
 
-    # Debug: check AI data availability
-    if ($script:AIInsightsResult) {
-        Write-Host "  AI insights available for HTML report (posture: $($script:AIInsightsResult.posture), keys: $($script:AIInsightsResult.Keys -join ', '))" -ForegroundColor Magenta
-    } else {
-        Write-Host "  AI insights: NOT available for HTML report" -ForegroundColor DarkGray
-    }
-
     Export-HTMLReport `
         -PolicyResults $htmlResults `
         -ComplianceData $htmlCompliance `
+        -CEPAssessment $cepAssessment `
         -CEPExportData $(if ($cepExportData) { $cepExportData } else { @() }) `
         -CEPTestResults $(if ($cepTestResults) { $cepTestResults } else { @() }) `
         -CEPPerScopeData $(if ($cepPerScopeData) { $cepPerScopeData } else { @() }) `
@@ -9434,9 +10449,11 @@ $ncHtmlFilter
         -InitiativeCount $classicInitCount `
         -RegulatoryCount $regulatoryInitCount `
         -OutputPath $htmlPath `
+        -DataQuality $dataQuality `
         -ALZData $(if ($alzData) { $alzData } else { $null }) `
+        -AssessmentFindings $assessmentFindings `
         -YAMLDeltaData $(if ($yamlDeltaData) { $yamlDeltaData } else { $null }) `
-        -AIInsights $(if ($script:AIInsightsResult) { $script:AIInsightsResult } else { $null })
+        -CostEvidenceRecords $(if ($costEvidenceRecords) { $costEvidenceRecords } else { @() })
 
     Write-Progress -Activity "Generating HTML Report" -Status "Complete" -PercentComplete 100 -Id 40
     Write-Progress -Activity "Generating HTML Report" -Completed -Id 40
@@ -9481,6 +10498,7 @@ if ($ExportYAML) {
         -OutputPath $yamlPath `
         -PolicyResults $(if ($results) { $results } else { @() }) `
         -ComplianceData $(if ($complianceData) { $complianceData } else { @{} }) `
+        -CEPAssessment $cepAssessment `
         -CEPExportData $(if ($cepExportData) { $cepExportData } else { @() }) `
         -CEPTestResults $(if ($cepTestResults) { $cepTestResults } else { @() }) `
         -CEPPerScopeData $(if ($cepPerScopeData) { $cepPerScopeData } else { @() }) `
@@ -9498,6 +10516,8 @@ if ($ExportYAML) {
         -EnforcedCount $enforcedCount `
         -AuditOnlyCount $auditOnlyCount `
         -TotalNCResources $totalNCResources `
+        -DataQuality $dataQuality `
+        -AssessmentFindings $assessmentFindings `
         -ScriptVersion $ScriptVersion
 
     Write-Progress -Activity "Generating YAML Database" -Status "Complete" -PercentComplete 100 -Id 50
